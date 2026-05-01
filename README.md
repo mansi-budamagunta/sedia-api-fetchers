@@ -2,6 +2,8 @@
 
 Python classes for fetching data from the European Commission's SEDIA API endpoints.
 
+**Note:** This library was originally developed by [Ruben Swarts](https://github.com/ajruben/sedia-api-fetchers). This fork is maintained by Mansi Budamagunta with additional updates and fixes.
+
 ## Overview
 
 This package includes 5 specialized fetchers for different types of EU data:
@@ -18,7 +20,7 @@ This package includes 5 specialized fetchers for different types of EU data:
 
 ### From source
 ```bash
-git clone https://github.com/ajruben/sedia-api-fetchers.git
+git clone https://github.com/mansi-budamagunta/sedia-api-fetchers.git
 cd sedia-api-fetchers  
 pip install .
 ```
@@ -388,8 +390,3 @@ For issues or questions:
 2. Review error messages for specific issues
 3. Verify programme IDs and API parameters
 4. Ensure network connectivity to EU APIs
-
----
-https://www.rubenswarts.nl/
-https://www.rubenswarts.nl/about
-https://www.rubenswarts.nl/projects/5
