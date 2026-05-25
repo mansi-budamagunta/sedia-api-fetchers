@@ -379,10 +379,6 @@ To extend the fetchers:
 4. Include progress tracking
 5. Update this README
 
-## License
-
-This project is part of the EU thesis research toolkit. Please refer to the main project license.
-
 ## Support
 
 For issues or questions:
