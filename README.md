@@ -21,7 +21,11 @@ This package includes 5 specialized fetchers for different types of EU data:
 ### From source
 ```bash
 git clone https://github.com/mansi-budamagunta/sedia-api-fetchers.git
-cd sedia-api-fetchers  
+```
+```
+cd sedia-api-fetchers
+```
+```
 pip install .
 ```
 
