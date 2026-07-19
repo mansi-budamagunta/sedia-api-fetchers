@@ -234,7 +234,7 @@ class ETLExtractor:
                 self.main_logger.info(f"EXTRACT SUCCESS: {len(data):,} records in {extraction_time:.1f}s")
                 
                 # Log if we got significantly different record count than expected
-                if abs(len(data) - programme.record_count) > (programme.record_count * 0.1):
+                if endpoint == "projects" and abs(len(data) - programme.record_count) > (programme.record_count * 0.1):
                     self.main_logger.warning(f"Record count mismatch: expected {programme.record_count:,}, got {len(data):,}")
                 
                 return ExtractionResult(
