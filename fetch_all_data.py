@@ -159,7 +159,7 @@ class ETLExtractor:
         facet_files = list(config.data_dir.glob("facet_data_*.json"))
         
         if not facet_files:
-            raise FileNotFoundError("No facet data files found. Run facets fetcher first.")
+            raise FileNotFoundError("No facet data files found matching 'facet_data_*.json' in the data directory. Run facets fetcher first.")
         
         latest_facet_file = max(facet_files, key=lambda x: x.stat().st_mtime)
         self.main_logger.info(f"Reading from: {latest_facet_file.name}")
