@@ -354,9 +354,9 @@ class ETLExtractor:
             
             self.fetchers = {
                 'projects': SEDIA_GET_PROJECTS,
-                'participants': SEDIA_GET_PARTICIPANTS,
-                'funding_tenders': SEDIA_GET_FUNDING_TENDERS,
-                'faq': SEDIA_GET_FAQ
+                # 'participants': SEDIA_GET_PARTICIPANTS,
+                # 'funding_tenders': SEDIA_GET_FUNDING_TENDERS,
+                # 'faq': SEDIA_GET_FAQ
             }
             self.main_logger.info("All fetcher classes imported successfully")
         except ImportError as e:
