@@ -233,7 +233,14 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
         print(f"💾 All data written to: {output_file}")
         return enriched_records
 
-    def fetch_all_records(self, programmes) -> pd.DataFrame:
+    # def fetch_all_records(self, programmes) -> pd.DataFrame:
+    def fetch_all_records(
+        self,
+        programmes,
+        sink=None,
+        return_df: bool = True,
+    ) -> pd.DataFrame | None:
+
         """
         Fetches all records for given programmes using the base class partitioning logic.
         
@@ -244,6 +251,15 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
                 - List of strings: ['h2020', 'horizon']
                 - List of ints: [31045243, 43108390]
                 - Mixed list: ['h2020', 43108390]
+            sink: Optional callable invoked with each fetched API page as
+                `list[dict]`.
+            return_df: Whether to accumulate and return a dataframe. Requires
+                `sink` when `False`.
+
+        Returns:
+            pd.DataFrame | None: Project records when `return_df=True`;
+            otherwise `None`.
+
         """
         program_ids = self._normalize_programme_input(programmes)
         print(f"Starting fetch for programme IDs: {program_ids}...")
@@ -252,14 +268,31 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
         sort = {"field": "es_SortDate", "order": "DESC"}
         
         # Use the base class method for partitioning
-        final_df = self.fetch_all_records_with_partitioning(base_query, sort)
+        # final_df = self.fetch_all_records_with_partitioning(base_query, sort)
         
-        if not final_df.empty:
+        # if not final_df.empty:
+        #     print(f"Successfully retrieved {len(final_df)} records.")
+        #     print(f"Unique records: {len(final_df.drop_duplicates(subset=['projectId'])) if 'projectId' in final_df.columns else 'N/A'}")
+        #     final_df = self._apply_metadata_flattening(final_df)
+        
+        # return final_df
+        final_df = self.fetch_all_records_with_partitioning(
+            base_query,
+            sort,
+            sink=sink,
+            return_df=return_df,
+        )
+
+        if final_df is not None and not final_df.empty:
             print(f"Successfully retrieved {len(final_df)} records.")
-            print(f"Unique records: {len(final_df.drop_duplicates(subset=['projectId'])) if 'projectId' in final_df.columns else 'N/A'}")
+            print(
+                f"Unique records: "
+                f"{len(final_df.drop_duplicates(subset=['projectId'])) if 'projectId' in final_df.columns else 'N/A'}"
+            )
             final_df = self._apply_metadata_flattening(final_df)
-        
+
         return final_df
+
 
     def get(self, programmes, save: bool = False) -> pd.DataFrame:
         """

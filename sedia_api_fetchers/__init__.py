@@ -428,19 +428,36 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 
         return total_results, min_date_str, max_date_str
     
-    def fetch_all_records_with_partitioning(self, query: dict, sort: dict = None) -> pd.DataFrame:
+    # def fetch_all_records_with_partitioning(self, query: dict, sort: dict = None) -> pd.DataFrame:
+    def fetch_all_records_with_partitioning(
+        self,
+        query: dict,
+        sort: dict = None,
+        sink=None,
+        return_df: bool = True,
+    ) -> pd.DataFrame | None:
         """
         Fetches all records for a given query. Automatically detects if
         the dataset is larger than API_FETCH_LIMIT and partitions the request by
         date range if necessary.
         
         Args:
-            query (dict): The search query
-            sort (dict): Sort parameters (defaults to es_SortDate DESC)
-            
+            query (dict): The search query.
+            sort (dict): Sort parameters (defaults to `es_SortDate` descending).
+            sink: Optional callable invoked with each fetched API page as
+                `list[dict]`.
+            return_df: Whether to accumulate and return fetched records as a
+                dataframe. Requires `sink` when `False`.
+
         Returns:
-            pd.DataFrame: All records for the query
+            pd.DataFrame | None: All records when `return_df=True`; otherwise
+            `None` after records have been sent to `sink`.
+
         """
+        if not return_df and sink is None:
+            raise ValueError("sink is required when return_df=False")
+
+
         if sort is None:
             sort = {"field": "es_SortDate", "order": "DESC"}
         
@@ -449,9 +466,12 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         # Try to get metadata with date range for partitioning
         total_records, min_date_str, max_date_str = self._get_metadata_with_date_range(query)
 
+        # if total_records == 0:
+        #     print("No records found for query.")
+        #     return pd.DataFrame()
         if total_records == 0:
             print("No records found for query.")
-            return pd.DataFrame()
+            return pd.DataFrame() if return_df else None
 
         print(f"Found {total_records:,} total records")
         
@@ -459,13 +479,21 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         if total_records > self.API_FETCH_LIMIT and min_date_str and max_date_str:
             print(f"Dataset exceeds {self.API_FETCH_LIMIT:,} limit. Using date range partitioning...")
             print(f"Date range: {min_date_str} to {max_date_str}")
-            return self._fetch_with_date_partitioning(query, sort, total_records, min_date_str, max_date_str)
+            return self._fetch_with_date_partitioning(
+                query, sort, total_records, min_date_str, max_date_str,
+                sink=sink, return_df=return_df,
+            )
+            # return self._fetch_with_date_partitioning(query, sort, total_records, min_date_str, max_date_str)
         
         # If total is within the API's limit, fetch it in one go
         elif total_records <= self.API_FETCH_LIMIT:
             print("Total is within limit, fetching directly.")
             self.pbar = tqdm(total=total_records, desc="Fetching records", unit="rec")
-            df = self._fetch_paginated_chunk(query, sort, total_records)
+            # df = self._fetch_paginated_chunk(query, sort, total_records)
+            df = self._fetch_paginated_chunk(
+                query, sort, total_records,
+                sink=sink, return_df=return_df,
+            )
             self.pbar.close()
             return df
         
@@ -474,12 +502,26 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             print(f"Warning: Dataset exceeds {self.API_FETCH_LIMIT:,} limit but no date range available.")
             print(f"Fetching first {self.API_FETCH_LIMIT:,} records only.")
             self.pbar = tqdm(total=self.API_FETCH_LIMIT, desc="Fetching records (limited)", unit="rec")
-            df = self._fetch_paginated_chunk(query, sort, self.API_FETCH_LIMIT)
+            df = self._fetch_paginated_chunk(
+                query, sort, self.API_FETCH_LIMIT,
+                sink=sink, return_df=return_df,
+            )
+            # df = self._fetch_paginated_chunk(query, sort, self.API_FETCH_LIMIT)
             self.pbar.close()
             return df
     
-    def _fetch_with_date_partitioning(self, base_query: dict, sort: dict, total_records: int, 
-                                    min_date_str: str, max_date_str: str) -> pd.DataFrame:
+    # def _fetch_with_date_partitioning(self, base_query: dict, sort: dict, total_records: int, 
+    #                                 min_date_str: str, max_date_str: str) -> pd.DataFrame:
+    def _fetch_with_date_partitioning(
+        self,
+        base_query: dict,
+        sort: dict,
+        total_records: int,
+        min_date_str: str,
+        max_date_str: str,
+        sink=None,
+        return_df: bool = True,
+    ) -> pd.DataFrame | None:
         """
         Fetch data using recursive date range partitioning.
         
@@ -502,7 +544,15 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         except ValueError as e:
             print(f"Error parsing dates: {e}")
             print("Falling back to non-partitioned fetch")
-            return self._fetch_paginated_chunk(base_query, sort, min(total_records, self.API_FETCH_LIMIT))
+            # return self._fetch_paginated_chunk(base_query, sort, min(total_records, self.API_FETCH_LIMIT))
+            return self._fetch_paginated_chunk(
+                base_query,
+                sort,
+                min(total_records, self.API_FETCH_LIMIT),
+                sink=sink,
+                return_df=return_df,
+            )
+
 
         ranges_to_process = [(min_date, max_date)]
         self.pbar = tqdm(total=total_records, desc="Overall Progress", unit="rec")
@@ -534,8 +584,17 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 
             if count_for_range <= self.API_FETCH_LIMIT:
                 print(f"Fetching chunk: {count_for_range:,} records ({start_date.date()} to {end_date.date()})")
-                chunk_df = self._fetch_paginated_chunk(range_query, sort, count_for_range)
-                all_dfs.append(chunk_df)
+                # chunk_df = self._fetch_paginated_chunk(range_query, sort, count_for_range)
+                chunk_df = self._fetch_paginated_chunk(
+                    range_query,
+                    sort,
+                    count_for_range,
+                    sink=sink,
+                    return_df=return_df,
+                )
+
+                if return_df:
+                    all_dfs.append(chunk_df)
             else:
                 print(f"Splitting large chunk: {count_for_range:,} records ({start_date.date()} to {end_date.date()})")
                 # Split the date range in half
@@ -545,9 +604,14 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 
         self.pbar.close()
 
+        if not return_df:
+            return None
+
         if not all_dfs:
             print("No data was fetched.")
             return pd.DataFrame()
+
+        # self.pbar.close()
 
         print("Concatenating all chunks...")
         final_df = pd.concat(all_dfs, ignore_index=True)
@@ -558,9 +622,21 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 
         return final_df
     
-    def _fetch_paginated_chunk(self, query: dict, sort: dict, count: int) -> pd.DataFrame:
+    # def _fetch_paginated_chunk(self, query: dict, sort: dict, count: int) -> pd.DataFrame:
+    def _fetch_paginated_chunk(
+        self,
+        query: dict,
+        sort: dict,
+        count: int,
+        sink=None,
+        return_df: bool = True,
+    ) -> pd.DataFrame | None:
+
         """Fetch all records for a query known to contain <= API_FETCH_LIMIT records."""
+        # all_records = []
         all_records = []
+        fetched_count = 0
+
         page_size = 100
         num_pages = min(math.ceil(count / page_size), 100)  # Cap at 100 pages
 
@@ -569,22 +645,45 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             data = self.query_api(query, sort, page_num=page, page_size=page_size)
             if data and "results" in data:
                 results = data["results"]
-                all_records.extend(results)
+                fetched_count += len(results)
+
+                if sink is not None:
+                    sink(results)
+
+                if return_df:
+                    all_records.extend(results)
+
                 chunk_pbar.update(len(results))
+
+                # results = data["results"]
+                # all_records.extend(results)
+                # chunk_pbar.update(len(results))
                 print(f"[DEBUG] Page {page} → {len(results)} hits")
             else:
                 print(f"Warning: Failed to fetch page {page} for query {json.dumps(query)}")
                 break
         chunk_pbar.close()
 
+        # if self.pbar:
+        #     self.pbar.update(len(all_records))
         if self.pbar:
-            self.pbar.update(len(all_records))
+            self.pbar.update(fetched_count)
+
+        # chunk_df = pd.DataFrame(all_records)
+        # if not chunk_df.empty:
+        #     chunk_df = self._apply_unwrapping_to_chunk(chunk_df)
+
+        # return chunk_df
+
+        if not return_df:
+            return None
 
         chunk_df = pd.DataFrame(all_records)
         if not chunk_df.empty:
             chunk_df = self._apply_unwrapping_to_chunk(chunk_df)
 
         return chunk_df
+
 
 
 class SEDIASimpleFetcher(SEDIABaseFetcher):

@@ -269,7 +269,7 @@ class ETLExtractor:
         facet_files = list(config.data_dir.glob("facet_data_*.json"))
         
         if not facet_files:
-            raise FileNotFoundError("No facet data files found matching 'facet_data_*.json' in the data directory. Run facets fetcher first.")
+            raise FileNotFoundError("No facet data files found. Run facets fetcher first.")
         
         latest_facet_file = max(facet_files, key=lambda x: x.stat().st_mtime)
         self.main_logger.info(f"Reading from: {latest_facet_file.name}")
@@ -400,7 +400,7 @@ class ETLExtractor:
                 self.main_logger.info(f"EXTRACT SUCCESS: {len(data):,} records in {extraction_time:.1f}s")
                 
                 # Log if we got significantly different record count than expected
-                if endpoint == "projects" and abs(len(data) - programme.record_count) > (programme.record_count * 0.1):
+                if abs(len(data) - programme.record_count) > (programme.record_count * 0.1):
                     self.main_logger.warning(f"Record count mismatch: expected {programme.record_count:,}, got {len(data):,}")
                 
                 return ExtractionResult(
