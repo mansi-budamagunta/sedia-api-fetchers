@@ -133,3 +133,6 @@ data/
 *.csv
 *.feather
 *.parquet
+
+# Generated/downloaded JSON data
+*.json
