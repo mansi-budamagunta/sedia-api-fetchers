@@ -175,6 +175,108 @@ class DatabaseSink:
                 text(f'SELECT COUNT(*) FROM "{table_name}"')
             ).scalar_one()
 
+    def count_programme_rows(
+        self,
+        programme_id: int,
+        table_name: str | None = None,
+    ) -> int:
+        """Return the number of rows stored for one programme."""
+        table_name = table_name or self.table_name
+
+        if not inspect(self.engine).has_table(table_name):
+            return 0
+
+        with self.engine.connect() as connection:
+            return connection.execute(
+                text(
+                    f'SELECT COUNT(*) FROM "{table_name}" '
+                    "WHERE programme_id = :programme_id"
+                ),
+                {"programme_id": programme_id},
+            ).scalar_one()
+
+    def publish_staging(
+        self,
+        staging_table: str,
+        published_table: str,
+    ) -> dict[str, int]:
+        """Insert valid, previously unpublished staged projects."""
+        inspector = inspect(self.engine)
+
+        if not inspector.has_table(staging_table):
+            return {
+                "staged": 0,
+                "invalid": 0,
+                "duplicate_staged": 0,
+                "inserted": 0,
+                "published": self.count_rows(published_table),
+            }
+
+        with self.engine.begin() as connection:
+            if not inspector.has_table(published_table):
+                connection.execute(text(
+                    f'CREATE TABLE "{published_table}" AS '
+                    f'SELECT * FROM "{staging_table}" WHERE 1 = 0'
+                ))
+
+            staged = connection.execute(text(f"""
+                SELECT COUNT(*)
+                FROM "{staging_table}"
+            """)).scalar_one()
+
+            invalid = connection.execute(text(f"""
+                SELECT COUNT(*)
+                FROM "{staging_table}"
+                WHERE reference IS NULL OR TRIM(reference) = ''
+            """)).scalar_one()
+
+            distinct_valid = connection.execute(text(f"""
+                SELECT COUNT(DISTINCT reference)
+                FROM "{staging_table}"
+                WHERE reference IS NOT NULL AND TRIM(reference) <> ''
+            """)).scalar_one()
+
+            columns = [
+                column["name"]
+                for column in inspector.get_columns(staging_table)
+            ]
+            quoted_columns = ", ".join(f'"{column}"' for column in columns)
+
+            result = connection.execute(text(f"""
+                INSERT INTO "{published_table}" ({quoted_columns})
+                SELECT {quoted_columns}
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY reference
+                               ORDER BY reference
+                           ) AS row_number
+                    FROM "{staging_table}"
+                    WHERE reference IS NOT NULL AND TRIM(reference) <> ''
+                ) AS staged
+                WHERE row_number = 1
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "{published_table}" AS published
+                      WHERE published.reference = staged.reference
+                  )
+            """))
+
+            published = connection.execute(text(f"""
+                SELECT COUNT(*)
+                FROM "{published_table}"
+            """)).scalar_one()
+
+        return {
+            "staged": staged,
+            "invalid": invalid,
+            "duplicate_staged": staged - invalid - distinct_valid,
+            "inserted": result.rowcount,
+            "published": published,
+        }
+
+
+
 
 
 
@@ -269,7 +371,11 @@ class ETLExtractor:
         facet_files = list(config.data_dir.glob("facet_data_*.json"))
         
         if not facet_files:
-            raise FileNotFoundError("No facet data files found matching 'facet_data_*.json' in the data directory. Run facets fetcher first.")
+            raise FileNotFoundError(
+                "No facet data files found matching 'facet_data_*.json' "
+                "in the data directory. Run facets fetcher first."
+            )
+
         
         latest_facet_file = max(facet_files, key=lambda x: x.stat().st_mtime)
         self.main_logger.info(f"Reading from: {latest_facet_file.name}")
@@ -326,6 +432,7 @@ class ETLExtractor:
             #     # Use the fetch_all_records method directly to ensure date partitioning works
             #     # This method handles large datasets automatically
             #     data = fetcher.fetch_all_records(programme.id)
+
             if endpoint == "projects":
                 if self.project_sink is None:
                     raise RuntimeError("Project SQLite sink is not configured")
@@ -337,11 +444,20 @@ class ETLExtractor:
 
                 rows_before = self.project_sink.rows_written
 
+                def programme_project_sink(records):
+                    for record in records:
+                        record["programme_id"] = programme.id
+                        record["programme_name"] = programme.name
+                        record["programme_clean_name"] = programme.clean_name
+
+                    self.project_sink(records)
+
                 fetcher.fetch_all_records(
                     programme.id,
-                    sink=self.project_sink,
+                    sink=programme_project_sink,
                     return_df=False,
                 )
+
 
                 rows_written = self.project_sink.rows_written - rows_before
                 extraction_time = time.time() - start_time
@@ -353,8 +469,8 @@ class ETLExtractor:
                     )
 
                     if abs(rows_written - programme.record_count) > (
-                        programme.record_count * 0.1
-                    ):
+                            programme.record_count * 0.1
+                        ):
                         self.main_logger.warning(
                             f"Record count mismatch: expected "
                             f"{programme.record_count:,}, got {rows_written:,}"
@@ -400,7 +516,9 @@ class ETLExtractor:
                 self.main_logger.info(f"EXTRACT SUCCESS: {len(data):,} records in {extraction_time:.1f}s")
                 
                 # Log if we got significantly different record count than expected
-                if endpoint == "projects" and abs(len(data) - programme.record_count) > (programme.record_count * 0.1):
+                if endpoint == "projects" and abs(
+                        len(data) - programme.record_count
+                    ) > programme.record_count * 0.1:
                     self.main_logger.warning(f"Record count mismatch: expected {programme.record_count:,}, got {len(data):,}")
                 
                 return ExtractionResult(
@@ -423,15 +541,27 @@ class ETLExtractor:
                 
         except Exception as e:
             extraction_time = time.time() - start_time
-            self.main_logger.error(f"EXTRACT FAILED: {endpoint} for {programme.name} after {extraction_time:.1f}s: {e}")
+            partial_rows = (
+                self.project_sink.rows_written
+                if endpoint == "projects" and self.project_sink is not None
+                else 0
+            )
+
+            self.main_logger.error(
+                f"EXTRACT FAILED: {endpoint} for {programme.name} "
+                f"after {extraction_time:.1f}s: {e}"
+            )
+
             return ExtractionResult(
                 programme=programme,
                 endpoint=endpoint,
                 data=pd.DataFrame(),
                 extraction_time=extraction_time,
                 success=False,
-                error_message=str(e)
+                record_count=partial_rows,
+                error_message=str(e),
             )
+
 
 class ETLTransformer:
     """Transform phase - Process, validate, and clean the data."""
@@ -852,6 +982,27 @@ class ETLPipeline:
         
         self.main_logger = self.logger.main_logger
         self.change_logger = self.logger.change_logger
+
+    def programme_needs_project_fetch(
+        self,
+        programme: ProgrammeMetadata,
+    ) -> bool:
+        """Return whether published projects are fewer than the facet count."""
+        published_count = self.project_sink.count_programme_rows(
+            programme.id,
+            self.config.projects_published_table,
+        )
+
+        if published_count > programme.record_count:
+            self.main_logger.warning(
+                f"Published project count exceeds facet count for "
+                f"{programme.name}: "
+                f"P={published_count}, F={programme.record_count}"
+            )
+            return False
+
+        return published_count < programme.record_count
+
     
     def run(self) -> Dict[str, Any]:
         """Execute the complete ETL pipeline."""
@@ -894,39 +1045,86 @@ class ETLPipeline:
                 self.main_logger.info(f"PROGRAMME {i}/{len(major_programmes)}: {programme.name}")
                 self.main_logger.info(f"Expected records: {programme.record_count:,}")
                 self.main_logger.info("="*60)
-                
+
                 # Process each endpoint for this programme
                 for endpoint in self.extractor.fetchers.keys():
-                    # EXTRACT
-                    extraction_result = self.extractor.extract_programme_data(programme, endpoint)
-                    results['extraction_results'].append(extraction_result)
-                    results['timing']['extraction'] += extraction_result.extraction_time
-                    
-                    if extraction_result.success:
-                        
-                        if endpoint == "projects":
-                            results["total_records"] += extraction_result.record_count
+                    if endpoint == "projects":
+                        if not self.programme_needs_project_fetch(programme):
+                            self.main_logger.info(
+                                f"Skipping projects for {programme.name}: "
+                                "published count satisfies facet count"
+                            )
                             continue
 
+                        self.project_sink.start_fresh_load()
+
+                    # EXTRACT
+                    extraction_result = self.extractor.extract_programme_data(
+                        programme,
+                        endpoint,
+                    )
+                    results["extraction_results"].append(extraction_result)
+                    results["timing"]["extraction"] += (
+                        extraction_result.extraction_time
+                    )
+
+                    if endpoint == "projects":
+                        if extraction_result.record_count > 0:
+                            publish_result = self.project_sink.publish_staging(
+                                self.config.projects_staging_table,
+                                self.config.projects_published_table,
+                            )
+                            staged_count = publish_result["staged"]
+                            status = (
+                                "complete"
+                                if staged_count == programme.record_count
+                                else "partial"
+                            )
+
+                            self.main_logger.info(
+                                f"Project publish for {programme.name}: "
+                                f"S={staged_count}, F={programme.record_count}, "
+                                f"inserted={publish_result['inserted']}, "
+                                f"invalid={publish_result['invalid']}, "
+                                f"duplicates={publish_result['duplicate_staged']}, "
+                                f"P={publish_result['published']} ({status})"
+                            )
+
+                            results["total_records"] += (
+                                extraction_result.record_count
+                            )
+
+                        continue
+
+                    if extraction_result.success:
                         # TRANSFORM
-                        transformation_result = self.transformer.transform_data(extraction_result)
-                        results['transformation_results'].append(transformation_result)
-                        results['timing']['transformation'] += transformation_result.transformation_time
-                        
+                        transformation_result = self.transformer.transform_data(
+                            extraction_result
+                        )
+                        results["transformation_results"].append(
+                            transformation_result
+                        )
+                        results["timing"]["transformation"] += (
+                            transformation_result.transformation_time
+                        )
+
                         if transformation_result.validation_passed:
                             # LOAD
-                            load_result = self.loader.load_data(transformation_result)
-                            results['load_results'].append(load_result)
-                            results['timing']['loading'] += load_result.load_time
-                            
-                            # Update statistics
+                            load_result = self.loader.load_data(
+                                transformation_result
+                            )
+                            results["load_results"].append(load_result)
+                            results["timing"]["loading"] += load_result.load_time
+
                             if load_result.file_path:
-                                results['files_saved'] += 1
-                                results['total_records'] += len(transformation_result.transformed_data)
-                            
+                                results["files_saved"] += 1
+                                results["total_records"] += len(
+                                    transformation_result.transformed_data
+                                )
+
                             if load_result.change_detected:
-                                results['changes_detected'] += 1
-                
+                                results["changes_detected"] += 1
+
                 results['programmes_processed'] += 1
             
             results['endpoints_processed'] = len(results['extraction_results'])
@@ -967,13 +1165,40 @@ class ETLPipeline:
         self.main_logger.info(f"   Changes detected: {results['changes_detected']}")
         
         # Success rates
-        successful_extractions = sum(1 for r in results['extraction_results'] if r.success)
-        successful_transformations = sum(1 for r in results['transformation_results'] if r.validation_passed)
-        
+        successful_extractions = sum(
+            1 for r in results["extraction_results"] if r.success
+        )
+        successful_transformations = sum(
+            1 for r in results["transformation_results"]
+            if r.validation_passed
+        )
+
+        extraction_total = len(results["extraction_results"])
+        transformation_total = len(results["transformation_results"])
+
+        extraction_rate = (
+            f"{successful_extractions / extraction_total * 100:.1f}%"
+            if extraction_total
+            else "n/a"
+        )
+        transformation_rate = (
+            f"{successful_transformations / transformation_total * 100:.1f}%"
+            if transformation_total
+            else "n/a"
+        )
+
         self.main_logger.info("SUCCESS RATES:")
-        self.main_logger.info(f"   Extraction success: {successful_extractions}/{len(results['extraction_results'])} ({successful_extractions/len(results['extraction_results'])*100:.1f}%)")
-        self.main_logger.info(f"   Transformation success: {successful_transformations}/{len(results['transformation_results'])} ({successful_transformations/len(results['transformation_results'])*100:.1f}%)")
-        
+        self.main_logger.info(
+            f"   Extraction success: "
+            f"{successful_extractions}/{extraction_total} "
+            f"({extraction_rate})"
+        )
+        self.main_logger.info(
+            f"   Transformation success: "
+            f"{successful_transformations}/{transformation_total} "
+            f"({transformation_rate})"
+        )
+
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Main log: {self.logger.log_file}")
         self.main_logger.info(f"Change log: {self.logger.change_log_file}")
