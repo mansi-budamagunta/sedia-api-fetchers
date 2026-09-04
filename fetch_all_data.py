@@ -351,6 +351,7 @@ class ETLExtractor:
             from sedia_api_fetchers.EUFT_retrieve_participants import SEDIA_GET_PARTICIPANTS
             from sedia_api_fetchers.EUFT_retrieve_funding_tenders import SEDIA_GET_FUNDING_TENDERS
             from sedia_api_fetchers.EUFT_retrieve_faq import SEDIA_GET_FAQ
+            from sedia_api_fetchers.EUFT_retrieve_facets import SEDIA_GET_FACETS
             
             self.fetchers = {
                 'projects': SEDIA_GET_PROJECTS,
@@ -358,6 +359,9 @@ class ETLExtractor:
                 # 'funding_tenders': SEDIA_GET_FUNDING_TENDERS,
                 # 'faq': SEDIA_GET_FAQ
             }
+
+            self.facet_fetcher = SEDIA_GET_FACETS
+
             self.main_logger.info("All fetcher classes imported successfully")
         except ImportError as e:
             self.main_logger.error(f"Failed to import fetchers: {e}")
@@ -365,23 +369,13 @@ class ETLExtractor:
     
     def extract_programme_metadata(self, config: ETLConfig) -> List[ProgrammeMetadata]:
         """Extract programme metadata from facet data."""
-        self.main_logger.info("EXTRACT PHASE: Loading programme metadata from facets")
-        
-        start_time = time.time()
-        facet_files = list(config.data_dir.glob("facet_data_*.json"))
-        
-        if not facet_files:
-            raise FileNotFoundError(
-                "No facet data files found matching 'facet_data_*.json' "
-                "in the data directory. Run facets fetcher first."
-            )
+        self.main_logger.info("EXTRACT PHASE: Fetching current programme metadata from facets API")
 
-        
-        latest_facet_file = max(facet_files, key=lambda x: x.stat().st_mtime)
-        self.main_logger.info(f"Reading from: {latest_facet_file.name}")
-        
-        with open(latest_facet_file, 'r', encoding='utf-8') as f:
-            facet_data = json.load(f)
+        start_time = time.time()
+        facet_data = self.facet_fetcher(flatten_metadata=False).get(save=False)
+
+        if not facet_data:
+            raise RuntimeError("No facet data returned by the facets API")
         
         programmes = []
         for facet in facet_data.get('facets', []):
