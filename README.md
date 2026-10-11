@@ -40,7 +40,7 @@ pip install .
 │   ├── EUFT_retrieve_facets.py            # Fetches available programmes & metadata
 │   └── helpers/
 │       └── functions.py                   # Utility functions
-├── fetch_all_data.py                      # Fetches data from all endpoints for all programmes
+├── fetch_all_endpoints_csv.py                      # Fetches data from all endpoints for all programmes
 ├── fetch_edf_data.py                      # Fetches all EDF-related data across endpoints
 └── README.md                              # This file
 ```
@@ -264,7 +264,7 @@ Available Options:
 
 ### Fetch All Data
 
-`fetch_all_data.py` fetches data from all endpoints for all available programmes. It requires a facets file to identify which programmes to fetch.
+`fetch_all_endpoints_csv.py` fetches data from all endpoints for all available programmes. It requires a facets file to identify which programmes to fetch.
 
 If you don't already have a facets file, generate one first using:
 ```bash
@@ -273,7 +273,7 @@ python -m sedia_api_fetchers.EUFT_retrieve_facets
 
 Then run the main script:
 ```bash
-python fetch_all_data.py
+python fetch_all_endpoints_csv.py
 ```
 
 Output will be saved to `data/` in your current working directory, with logs in `logs/`.
