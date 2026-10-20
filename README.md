@@ -1,33 +1,59 @@
 # SEDIA API Fetchers
 
-Python classes for fetching data from the European Commission's SEDIA API endpoints.
+Python tools for retrieving data from the European Commission’s SEDIA API.
 
-**Note:** This library was originally developed by [Ruben Swarts](https://github.com/ajruben/sedia-api-fetchers). This fork is maintained by Mansi Budamagunta with additional updates and fixes.
+The primary workflow maintains a database-backed snapshot of projects funded under configured EU programmes. Individual fetchers can also retrieve projects and related data for file-based analysis.
 
-## Overview
+**Note:** This library was originally developed by [Ruben Swarts](https://github.com/ajruben/sedia-api-fetchers). This fork is maintained by Mansi Budamagunta.
 
-This package includes 5 specialized fetchers for different types of EU data:
+## Workflows
 
-| Fetcher | Purpose | API Key | Data Type |
-|---------|---------|---------|-----------|
-| `SEDIA_GET_PROJECTS` | EU funded projects | `SEDIA_NONH2020_PROD` | Project details, metadata, participants |
-| `SEDIA_GET_PARTICIPANTS` | Organizations & persons | `SEDIA_PERSON` | Participant profiles, collaborations |
-| `SEDIA_GET_FUNDING_TENDERS` | Calls & tenders | `SEDIA` | Grant opportunities, tender notices |
-| `SEDIA_GET_TOPICS` | Topic details | `SEDIA` | Research topic specifications |
-| `SEDIA_GET_FAQ` | FAQ system | `SEDIA_FAQ` | Frequently asked questions |
+### Maintain the project database
 
-## Installation & Setup
+`fetch_all_project_data_db.py` retrieves projects for all configured programmes and synchronises them with a database.
 
-### From source
+The sync:
+
+- inserts new project references;
+- updates existing references for programmes that are fetched;
+- retains existing projects missing from an incomplete API result;
+- skips programmes already known to be complete.
+
+### Retrieve data directly
+
+The fetcher classes can be used independently to retrieve selected projects, participants, funding opportunities, topics, FAQs, and programme metadata. Dataframe-based fetchers can save their results as timestamped CSV files; the facets fetcher saves JSON.
+
+## Installation
+
 ```bash
 git clone https://github.com/mansi-budamagunta/sedia-api-fetchers.git
-```
-```
 cd sedia-api-fetchers
-```
-```
 pip install .
 ```
+
+## Database configuration
+
+The ingestion service requires an existing database and a SQLAlchemy connection URL supplied through `SEDIA_DB_URL`. The current ingestion implementation targets PostgreSQL and uses PostgreSQL-specific upsert behavior.
+
+It reads the variable from the environment or from a `.env` file in the repository root:
+
+```text
+SEDIA_DB_URL=postgresql+psycopg://username:password@localhost:5432/database_name
+```
+
+Alternatively, set it in the shell:
+
+```bash
+export SEDIA_DB_URL="postgresql+psycopg://username:password@localhost:5432/database_name"
+python fetch_all_project_data_db.py
+```
+
+The database itself must already exist. The service manages these tables:
+
+- `raw_projects_staging`: recreated for each programme fetch;
+- `raw_projects`: created on the first successful load if absent, then synchronised by project reference.
+
+The database user therefore needs permission to create and drop tables and indexes, and to select, insert, and update rows.
 
 ### Directory Structure
 ```
@@ -38,12 +64,24 @@ pip install .
 │   ├── EUFT_retrieve_topics.py            # Topics fetcher
 │   ├── EUFT_retrieve_faq.py               # FAQ fetcher
 │   ├── EUFT_retrieve_facets.py            # Fetches available programmes & metadata
+│   ├── database.py                        # Project database access and synchronisation
 │   └── helpers/
 │       └── functions.py                   # Utility functions
-├── fetch_all_data.py                      # Fetches data from all endpoints for all programmes
-├── fetch_edf_data.py                      # Fetches all EDF-related data across endpoints
+├── fetch_all_project_data_db.py           # Fetches and publishes all project data
 └── README.md                              # This file
 ```
+
+## All Fetchers
+
+This package includes five primary data fetchers plus a facets fetcher for programme metadata.
+
+| Fetcher | Purpose | API Key | Data Type |
+|---------|---------|---------|-----------|
+| `SEDIA_GET_PROJECTS` | EU funded projects | `SEDIA_NONH2020_PROD` | Project details, metadata, participants |
+| `SEDIA_GET_PARTICIPANTS` | Organizations & persons | `SEDIA_PERSON` | Participant profiles, collaborations |
+| `SEDIA_GET_FUNDING_TENDERS` | Calls & tenders | `SEDIA` | Grant opportunities, tender notices |
+| `SEDIA_GET_TOPICS` | Topic details | `SEDIA` | Research topic specifications |
+| `SEDIA_GET_FAQ` | FAQ system | `SEDIA_FAQ` | Frequently asked questions |
 
 ## Architecture
 
@@ -260,24 +298,6 @@ Available Options:
 - Status: `active`, `archived`, `all`
 - Details: `fetch_details=True` for complete content
 
-**Architecture**: Uses `SEDIAPaginatedFetcher` (when migrated)
-
-### Fetch All Data
-
-`fetch_all_data.py` fetches data from all endpoints for all available programmes. It requires a facets file to identify which programmes to fetch.
-
-If you don't already have a facets file, generate one first using:
-```bash
-python -m sedia_api_fetchers.EUFT_retrieve_facets
-```
-
-Then run the main script:
-```bash
-python fetch_all_data.py
-```
-
-Output will be saved to `data/` in your current working directory, with logs in `logs/`.
-
 ## Programme IDs Reference
 
 | Programme | Name | ID |
@@ -341,19 +361,6 @@ df_flat = Functions.flatten_dataframe_metadata(df)
 
 # Clean empty containers
 df_clean = Functions.clean_empty_containers(df_flat)
-```
-
-## Output Files
-
-All fetchers generate timestamped CSV files:
-
-```
-data/
-├── project_data_44181033_20241201_143022.csv
-├── participant_data_44181033_20241201_143155.csv
-├── funding_tenders_data_horizon_grants_open_20241201_143301.csv
-├── topic_details_HORIZON-CL3-2022-BM-01-01_20241201_143445.csv
-└── faq_data_31045243_all_all_20241201_143612.csv
 ```
 
 ## Important Notes
