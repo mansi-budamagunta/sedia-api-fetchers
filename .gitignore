@@ -76,6 +76,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
 
 # IPython
 profile_default/
@@ -133,3 +134,9 @@ data/
 *.csv
 *.feather
 *.parquet
+
+# Generated/downloaded JSON data
+*.json
+
+# macOS files
+*.DS_Store

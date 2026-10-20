@@ -2,17 +2,8 @@ import requests
 import pandas as pd
 import json
 import os
-import time
-import pathlib
-import glob
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
-import math
 from tqdm.auto import tqdm
-from datetime import datetime, timedelta
-import numpy as np
-import re
-from typing import Any
+
 try:
     from helpers.functions import Functions
 except ImportError:
@@ -57,8 +48,6 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
         
         # Set up document API URL for detailed project information
         self.DOCUMENT_API_BASE = f"{self.SCHEME}{self.HOST}/search-api/prod/rest/document/"
-
-
 
     def query_api(self, query: dict, sort: dict, page_num: int = 1, page_size: int = 100) -> dict:
         """
@@ -233,7 +222,13 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
         print(f"💾 All data written to: {output_file}")
         return enriched_records
 
-    def fetch_all_records(self, programmes) -> pd.DataFrame:
+    def fetch_all_records(
+        self,
+        programmes,
+        database_sink=None,
+        return_df: bool = True,
+    ) -> pd.DataFrame | None:
+
         """
         Fetches all records for given programmes using the base class partitioning logic.
         
@@ -244,6 +239,15 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
                 - List of strings: ['h2020', 'horizon']
                 - List of ints: [31045243, 43108390]
                 - Mixed list: ['h2020', 43108390]
+            database_sink: database_sink: Optional object exposing write_batch(df), called once for
+                    each transformed page DataFrame.
+            return_df: Whether to accumulate and return a dataframe. Requires
+                `database_sink` when `False`.
+
+        Returns:
+            pd.DataFrame | None: Project records when `return_df=True`;
+            otherwise `None`.
+
         """
         program_ids = self._normalize_programme_input(programmes)
         print(f"Starting fetch for programme IDs: {program_ids}...")
@@ -252,14 +256,22 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
         sort = {"field": "es_SortDate", "order": "DESC"}
         
         # Use the base class method for partitioning
-        final_df = self.fetch_all_records_with_partitioning(base_query, sort)
-        
-        if not final_df.empty:
+        final_df = self.fetch_all_records_with_partitioning(
+            base_query,
+            sort,
+            database_sink=database_sink,
+            return_df=return_df,
+        )
+
+        if final_df is not None and not final_df.empty:
             print(f"Successfully retrieved {len(final_df)} records.")
-            print(f"Unique records: {len(final_df.drop_duplicates(subset=['projectId'])) if 'projectId' in final_df.columns else 'N/A'}")
-            final_df = self._apply_metadata_flattening(final_df)
-        
+            print(
+                f"Unique records: "
+                f"{len(final_df.drop_duplicates(subset=['projectId'])) if 'projectId' in final_df.columns else 'N/A'}"
+            )
+
         return final_df
+
 
     def get(self, programmes, save: bool = False) -> pd.DataFrame:
         """

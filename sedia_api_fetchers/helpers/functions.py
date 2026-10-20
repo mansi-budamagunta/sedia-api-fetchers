@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import warnings
 from typing import Any, Dict, List, Tuple, Union
 import json
 import logging
@@ -587,7 +586,7 @@ class Functions:
         if df.empty:
             return df
 
-        print(f"Applying comprehensive metadata flattening to {len(df):,} records...")
+        # print(f"Applying comprehensive metadata flattening to {len(df):,} records...")
         flattened_records = []
 
         for idx, row in df.iterrows():
@@ -608,9 +607,9 @@ class Functions:
         flattened_df = pd.DataFrame(flattened_records)
         flattened_df = Functions.clean_empty_containers(flattened_df)
 
-        print(f"Comprehensive flattening complete!")
-        print(f"  Original columns: {len(df.columns)}")
-        print(f"  Flattened columns: {len(flattened_df.columns)}")
-        print(f"  New columns added: {len(flattened_df.columns) - len(df.columns)}")
+        # print(f"Comprehensive flattening complete!")
+        # print(f"  Original columns: {len(df.columns)}")
+        # print(f"  Flattened columns: {len(flattened_df.columns)}")
+        # print(f"  New columns added: {len(flattened_df.columns) - len(df.columns)}")
 
         return flattened_df

@@ -124,10 +124,9 @@ class SEDIA_GET_FACETS(SEDIABaseFetcher):
             base_query["bool"]["must"].append({
                 "terms": {"programId": [str(pid) for pid in program_ids]}
             })
-        else:
-            print("Fetching facets for all programmes")
-
-        print(f"Query: {json.dumps(base_query, indent=2)}")
+            print(f"Query: {json.dumps(base_query, indent=2)}")
+        # else:
+            # print("Fetching facets for all programmes")
         
         # Fetch facet data
         facet_data = self.query_api(base_query)
@@ -212,10 +211,10 @@ class SEDIA_GET_FACETS(SEDIABaseFetcher):
             facet_data = self.fetch_facets(query=query, programmes=programmes)
 
             if not facet_data:
-                print("No facet data retrieved.")
+                # print("No facet data retrieved.")
                 return {}
 
-            print("Facet data retrieval complete!")
+            # print("Facet data retrieval complete!")
 
             # Save the facet data
             if save:
