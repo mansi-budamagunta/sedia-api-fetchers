@@ -347,10 +347,20 @@ class ETLPipeline:
                 )
 
                 if extraction_result.record_count > 0:
+
+                    self.main_logger.info(
+                        f"Publishing {extraction_result.record_count:,} staged projects "
+                        f"for {programme.name}"
+                    )
+                    publish_start = time.time()
+
                     publish_result = self.project_sink.publish_programme_staging(
                         self.config.projects_staging_table,
                         self.config.projects_published_table,
                     )
+
+                    publish_time = time.time() - publish_start
+
                     staged_count = publish_result["staged"]
                     status = (
                         "complete"
@@ -364,7 +374,7 @@ class ETLPipeline:
                         f"inserted={publish_result['inserted']}, "
                         f"invalid={publish_result['invalid']}, "
                         f"duplicates={publish_result['duplicate_staged']}, "
-                        f"P={publish_result['published']} ({status})"
+                        f"P={publish_result['published']} ({status}) in {publish_time:.1f}s"
                     )
 
                     results["total_records"] += (
@@ -437,11 +447,11 @@ def main():
     config = ETLConfig(
         data_dir=base_dir / "data",
         logs_dir=base_dir / "logs",
-        db_url=os.environ.get(
-                    "SEDIA_DB_URL",
-                    f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
-                ),
-        # db_url=f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
+        # db_url=os.environ.get(
+        #             "SEDIA_DB_URL",
+        #             f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
+        #         ),
+        db_url=f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
         min_record_threshold=1,
         log_level="INFO",
     )
@@ -452,12 +462,7 @@ def main():
     
     # Run the ETL pipeline
     pipeline = ETLPipeline(config)
-    results = pipeline.run()
-    
-    return (
-        results["files_saved"] > 0
-        or pipeline.project_sink.rows_written > 0
-    )
+    pipeline.run()
 
 if __name__ == "__main__":
     main()
