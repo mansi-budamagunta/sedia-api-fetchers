@@ -85,6 +85,7 @@ class SEDIABaseFetcher(ABC):
         'justice_programme_just': 43252386,
         'justice_programme_just_2014_2020': 31070247,
         'neighbourhood_development_and_international_cooperation_instrument_global_europe_ndici': 45876777,
+        'pilot_projects_preparation_actions_pppa': 43637601,
         'programme_for_the_competitiveness_of_enterprises_and_small_and_medium_sized_enterprises_cosme_2014_2020': 31059643,
         'programme_for_the_environment_and_climate_action_life': 43252405,
         'programme_for_the_environment_and_climate_action_life_2014_2020': 31107710,
