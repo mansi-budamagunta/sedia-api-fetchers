@@ -185,11 +185,6 @@ class ETLExtractor:
             extraction_time = time.time() - start_time
 
             if rows_written > 0:
-                self.main_logger.info(
-                    f"EXTRACT SUCCESS: streamed {rows_written:,} project records "
-                    f"in {extraction_time:.1f}s"
-                )
-
                 return ExtractionResult(
                     programme=programme,
                     endpoint=endpoint,
@@ -299,6 +294,7 @@ class ETLPipeline:
             "programmes_partial": 0,
             "programmes_failed": 0,
             "projects_inserted": 0,
+            "projects_updated": 0,
             "extraction_results": [],
             "timing": {
                 "total": 0,
@@ -360,12 +356,14 @@ class ETLPipeline:
                         status = "PARTIAL"
                     
                     results["projects_inserted"] += publish_result["inserted"]
+                    results["projects_updated"] += publish_result['updated']
 
                     self.main_logger.info(
                         f"{status}: {programme.name} — "
                         f"expected={programme.record_count:,}, "
                         f"database_total={publish_result['published']:,}, "
                         f"inserted={publish_result['inserted']:,}, "
+                        f"updated={publish_result['updated']:,}, "
                         f"time={elapsed:.1f}s"
                     )
 
@@ -375,8 +373,6 @@ class ETLPipeline:
                             f"invalid={publish_result['invalid']:,}, "
                             f"staging_duplicates={publish_result['duplicate_staged']:,}"
                         )
-
-                    results["projects_inserted"] += publish_result['inserted']
 
                 else: # extraction_result.record_count == 0
                     results["programmes_failed"] += 1
@@ -428,6 +424,9 @@ class ETLPipeline:
         self.main_logger.info(
             f"Projects newly inserted: {results['projects_inserted']:,}"
         )
+        self.main_logger.info(
+            f"Projects updated: {results['projects_updated']:,}"
+        )   
 
         self.main_logger.info("="*60)
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

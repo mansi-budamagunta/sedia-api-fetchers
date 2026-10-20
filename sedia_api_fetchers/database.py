@@ -87,127 +87,162 @@ class DatabaseSink:
             ).scalar_one()
 
     def publish_programme_staging(
-            self,
-            staging_table: str,
-            published_table: str,
-        ) -> dict[str, int]:
-            """Publish new staged projects for the current programme."""
-            inspector = inspect(self.engine)
-            programme_id = self.programme.id
+        self,
+        staging_table: str,
+        published_table: str,
+    ) -> dict[str, int]:
+        """Insert new projects and refresh existing projects from staging."""
+        inspector = inspect(self.engine)
+        programme_id = self.programme.id
 
-            if not inspector.has_table(staging_table):
-                return {
-                    "staged": 0,
-                    "invalid": 0,
-                    "duplicate_staged": 0,
-                    "inserted": 0,
-                    "published_for_programme":
-                        self.count_programme_rows(programme_id, published_table),
-                }
+        # Nothing was fetched for this programme, so there is nothing to publish.
+        if not inspector.has_table(staging_table):
+            return {
+                "staged": 0,
+                "invalid": 0,
+                "duplicate_staged": 0,
+                "inserted": 0,
+                "updated": 0,
+                "published_for_programme":
+                    self.count_programme_rows(programme_id, published_table),
+            }
 
-            with self.engine.begin() as connection:
-                if not inspector.has_table(published_table):
-                    connection.execute(text(
-                        f'CREATE TABLE "{published_table}" AS '
-                        f'SELECT * FROM "{staging_table}" WHERE 1 = 0'
-                    ))
-
-                # Create indexes for faster insertion
+        with self.engine.begin() as connection:
+            # On the first publication, create an empty published table with the
+            # same schema as the staging table.
+            if not inspector.has_table(published_table):
                 connection.execute(text(
-                    f'CREATE INDEX IF NOT EXISTS "ix_{published_table}_reference" '
-                    f'ON "{published_table}" ("reference")'
-                ))
-                connection.execute(text(
-                    f'CREATE INDEX IF NOT EXISTS "ix_{published_table}_programme_id" '
-                    f'ON "{published_table}" ("programme_id")'
+                    f'CREATE TABLE "{published_table}" AS '
+                    f'SELECT * FROM "{staging_table}" WHERE 1 = 0'
                 ))
 
-                staged = connection.execute(
-                    text(f"""
-                        SELECT COUNT(*)
-                        FROM "{staging_table}"
-                        WHERE programme_id = :programme_id
-                    """),
-                    {"programme_id": programme_id},
-                ).scalar_one()
+            # ON CONFLICT requires reference to be unique. This also makes
+            # lookups and conflict detection efficient.
+            #
+            # Use a new index name because the database may already contain the
+            # older, non-unique ix_<table>_reference index.
+            connection.execute(text(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS '
+                f'"ux_{published_table}_reference" '
+                f'ON "{published_table}" ("reference")'
+            ))
 
-                invalid = connection.execute(
-                    text(f"""
-                        SELECT COUNT(*)
-                        FROM "{staging_table}"
-                        WHERE programme_id = :programme_id
-                        AND (reference IS NULL OR TRIM(reference) = '')
-                    """),
-                    {"programme_id": programme_id},
-                ).scalar_one()
+            connection.execute(text(
+                f'CREATE INDEX IF NOT EXISTS '
+                f'"ix_{published_table}_programme_id" '
+                f'ON "{published_table}" ("programme_id")'
+            ))
 
-                distinct_valid = connection.execute(
-                    text(f"""
-                        SELECT COUNT(DISTINCT reference)
+            # Count every staged row, including invalid and duplicate rows.
+            staged = connection.execute(
+                text(f"""
+                    SELECT COUNT(*)
+                    FROM "{staging_table}"
+                    WHERE programme_id = :programme_id
+                """),
+                {"programme_id": programme_id},
+            ).scalar_one()
+
+            # Rows without a usable reference cannot be safely published.
+            invalid = connection.execute(
+                text(f"""
+                    SELECT COUNT(*)
+                    FROM "{staging_table}"
+                    WHERE programme_id = :programme_id
+                    AND (reference IS NULL OR TRIM(reference) = '')
+                """),
+                {"programme_id": programme_id},
+            ).scalar_one()
+
+            # This is the number of distinct, publishable projects in staging.
+            distinct_valid = connection.execute(
+                text(f"""
+                    SELECT COUNT(DISTINCT reference)
+                    FROM "{staging_table}"
+                    WHERE programme_id = :programme_id
+                    AND reference IS NOT NULL
+                    AND TRIM(reference) <> ''
+                """),
+                {"programme_id": programme_id},
+            ).scalar_one()
+
+            # Count staged references that are already published. These rows will
+            # be refreshed rather than inserted.
+            existing = connection.execute(
+                text(f"""
+                    SELECT COUNT(DISTINCT staged.reference)
+                    FROM "{staging_table}" AS staged
+                    INNER JOIN "{published_table}" AS published
+                        ON published.reference = staged.reference
+                    WHERE staged.programme_id = :programme_id
+                    AND staged.reference IS NOT NULL
+                    AND TRIM(staged.reference) <> ''
+                """),
+                {"programme_id": programme_id},
+            ).scalar_one()
+
+            # Read the staging schema so the statement continues to work if the
+            # API supplies additional project columns in future.
+            columns = [
+                column["name"]
+                for column in inspector.get_columns(staging_table)
+            ]
+            quoted_columns = ", ".join(
+                f'"{column}"' for column in columns
+            )
+
+            # The reference identifies the row and must not be changed. Every
+            # other column is refreshed from the newly fetched staged row.
+            update_columns = [
+                column for column in columns
+                if column != "reference"
+            ]
+            update_assignments = ", ".join(
+                f'"{column}" = EXCLUDED."{column}"'
+                for column in update_columns
+            )
+
+            # Deduplicate staging by reference, then:
+            #
+            # - insert references that are not yet published;
+            # - update every non-key field for references already published;
+            # - leave published projects absent from staging untouched.
+            connection.execute(
+                text(f"""
+                    INSERT INTO "{published_table}" ({quoted_columns})
+                    SELECT {quoted_columns}
+                    FROM (
+                        SELECT *,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY reference
+                                ORDER BY reference
+                            ) AS row_number
                         FROM "{staging_table}"
                         WHERE programme_id = :programme_id
                         AND reference IS NOT NULL
                         AND TRIM(reference) <> ''
-                    """),
-                    {"programme_id": programme_id},
-                ).scalar_one()
+                    ) AS staged
+                    WHERE row_number = 1
+                    ON CONFLICT (reference) DO UPDATE
+                    SET {update_assignments}
+                """),
+                {"programme_id": programme_id},
+            )
 
-                columns = [
-                    column["name"]
-                    for column in inspector.get_columns(staging_table)
-                ]
-                quoted_columns = ", ".join(
-                    f'"{column}"' for column in columns
-                )
+            published_after = connection.execute(
+                text(f"""
+                    SELECT COUNT(*)
+                    FROM "{published_table}"
+                    WHERE programme_id = :programme_id
+                """),
+                {"programme_id": programme_id},
+            ).scalar_one()
 
-                published_before = connection.execute(
-                    text(f"""
-                        SELECT COUNT(*)
-                        FROM "{published_table}"
-                        WHERE programme_id = :programme_id
-                    """),
-                    {"programme_id": programme_id},
-                ).scalar_one()
-
-                connection.execute(
-                    text(f"""
-                        INSERT INTO "{published_table}" ({quoted_columns})
-                        SELECT {quoted_columns}
-                        FROM (
-                            SELECT *,
-                                ROW_NUMBER() OVER (
-                                    PARTITION BY reference
-                                    ORDER BY reference
-                                ) AS row_number
-                            FROM "{staging_table}"
-                            WHERE programme_id = :programme_id
-                            AND reference IS NOT NULL
-                            AND TRIM(reference) <> ''
-                        ) AS staged
-                        WHERE row_number = 1
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM "{published_table}" AS published
-                            WHERE published.reference = staged.reference
-                        )
-                    """),
-                    {"programme_id": programme_id},
-                )
-
-                published_after = connection.execute(
-                    text(f"""
-                        SELECT COUNT(*)
-                        FROM "{published_table}"
-                        WHERE programme_id = :programme_id
-                    """),
-                    {"programme_id": programme_id},
-                ).scalar_one()
-
-            return {
-                "staged": staged,
-                "invalid": invalid,
-                "duplicate_staged": staged - invalid - distinct_valid,
-                "inserted": published_after - published_before,
-                "published": published_after,
-            }
-        
+        return {
+            "staged": staged,
+            "invalid": invalid,
+            "duplicate_staged": staged - invalid - distinct_valid,
+            "inserted": distinct_valid - existing,
+            "updated": existing,
+            "published": published_after,
+        }      
