@@ -67,7 +67,7 @@ The database user therefore needs permission to create and drop tables and index
 │   ├── database.py                        # Project database access and synchronisation
 │   └── helpers/
 │       └── functions.py                   # Utility functions
-├── fetch_all_project_data_db.py           # Fetches and publishes all project data
+├── fetch_all_project_data_db.py           # Fetches and synchronises all project data
 └── README.md                              # This file
 ```
 
