@@ -433,45 +433,6 @@ class ETLPipeline:
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Log file: {self.logger.log_file}")
 
-    
-    # def _log_final_summary(self, results: Dict[str, Any]):
-    #     """Log comprehensive pipeline summary."""
-    #     self.main_logger.info("="*80)
-    #     self.main_logger.info("ETL PIPELINE COMPLETED")
-    #     self.main_logger.info("="*80)
-        
-    #     # Performance summary
-    #     timing = results['timing']
-    #     self.main_logger.info("PERFORMANCE SUMMARY:")
-    #     self.main_logger.info(f"   Total execution time: {timing['total']:.1f}s")
-    #     # self.main_logger.info(f"   Extraction time: {timing['extraction']:.1f}s ({timing['extraction']/timing['total']*100:.1f}%)")
-        
-    #     # Data summary
-    #     self.main_logger.info("DATA SUMMARY:")
-    #     self.main_logger.info(f"   Programmes processed: {results['programmes_processed']}")
-    #     self.main_logger.info(f"   Projects newly inserted: {results['projects_inserted']:,}")
-
-    #     # Success rates
-    #     successful_extractions = sum(
-    #         1 for r in results["extraction_results"] if r.success
-    #     )
-
-    #     extraction_total = len(results["extraction_results"])
-
-    #     extraction_rate = (
-    #         f"{successful_extractions / extraction_total * 100:.1f}%"
-    #         if extraction_total
-    #         else "n/a"
-    #     )
-
-    #     self.main_logger.info("SUCCESS RATES:")
-    #     self.main_logger.info(
-    #         f"   Extraction success: "
-    #         f"{successful_extractions}/{extraction_total} "
-    #         f"({extraction_rate})"
-    #     )
-
-
 def main():
     """Main entry point for the ETL pipeline."""
     # Set up configuration
