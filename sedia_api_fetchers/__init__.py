@@ -529,11 +529,11 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             pd.DataFrame: All fetched records
         """
         all_dfs = []
-        date_format = "%Y-%m-%dT%H:%M:%S.%f"
+        date_format = "%Y-%m-%dT%H:%M:%S.%f%z"
 
         try:
-            min_date = datetime.fromisoformat(min_date_str).astimezone(timezone.utc)
-            max_date = datetime.fromisoformat(max_date_str).astimezone(timezone.utc)
+            min_date = datetime.strptime(min_date_str, date_format).astimezone(timezone.utc)
+            max_date = datetime.strptime(max_date_str, date_format).astimezone(timezone.utc)
         except ValueError as e:
             print(f"Error parsing dates: {e}")
             print("Falling back to non-partitioned fetch")
