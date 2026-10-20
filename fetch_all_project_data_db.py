@@ -11,16 +11,27 @@ import os
 import sys
 import time
 import logging
-import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from sedia_api_fetchers.database import DatabaseSink
+from dotenv import load_dotenv
+from sqlalchemy import text
 
 # Add current directory to path for imports
-current_dir = Path(__file__).parent
+current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
+
+# Ensure that the db_url is set
+load_dotenv(current_dir / ".env")
+db_url = os.environ.get("SEDIA_DB_URL")
+if not db_url:
+    # print(db_url)
+    raise RuntimeError(
+        "Missing required environment variable SEDIA_DB_URL. "
+        "Set it to the SQLAlchemy database connection URL before running the projects-ingestion pipeline."
+    )
 
 @dataclass
 class ETLConfig:
@@ -269,6 +280,14 @@ class ETLPipeline:
         self.main_logger = self.logger.main_logger
         self.change_logger = self.logger.change_logger
 
+    def check_database_connection(self):
+        """Confirm database availability before making API requests."""
+        self.main_logger.info("Checking database connection")
+        with self.project_sink.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        self.main_logger.info("Database connection successful")
+
+
     def programme_needs_project_fetch(
         self,
         programme: ProgrammeMetadata,
@@ -316,6 +335,8 @@ class ETLPipeline:
             # EXTRACT: Get programme metadata
             programmes = self.extractor.extract_programme_metadata(self.config)
             major_programmes = [p for p in programmes if p.record_count >= self.config.min_record_threshold]
+
+            self.check_database_connection()
             
             self.main_logger.info(f"Processing {len(major_programmes)} programmes (>={self.config.min_record_threshold} records) out of {len(programmes)} total programmes")
             
@@ -443,15 +464,11 @@ class ETLPipeline:
 def main():
     """Main entry point for the ETL pipeline."""
     # Set up configuration
-    base_dir = Path.cwd()
+    base_dir = current_dir
     config = ETLConfig(
         data_dir=base_dir / "data",
         logs_dir=base_dir / "logs",
-        # db_url=os.environ.get(
-        #             "SEDIA_DB_URL",
-        #             f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
-        #         ),
-        db_url=f"sqlite:///{base_dir / 'data' / 'sedia.db'}",
+        db_url=db_url,
         min_record_threshold=1,
         log_level="INFO",
     )
