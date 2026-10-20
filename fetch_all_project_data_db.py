@@ -147,7 +147,9 @@ class ETLExtractor:
         programmes.sort(key=lambda x: x.record_count)
 
         extraction_time = time.time() - start_time
-        self.main_logger.info(f"Extracted {len(programmes)} programmes in {extraction_time:.1f}s")
+        self.main_logger.info(f"Extracted facet data for {len(programmes)} programmes in {extraction_time:.1f}s")
+        self.main_logger.info("="*80)
+
         
         return programmes
     
@@ -291,13 +293,16 @@ class ETLPipeline:
         
         # Initialize results tracking
         results = {
-            'programmes_processed': 0,
-            'total_records': 0,
-            'extraction_results': [],
-            'timing': {
-                'extraction': 0,
-                'total': 0
-            }
+            "programmes_processed": 0,
+            "programmes_skipped": 0,
+            "programmes_complete": 0,
+            "programmes_partial": 0,
+            "programmes_failed": 0,
+            "projects_inserted": 0,
+            "extraction_results": [],
+            "timing": {
+                "total": 0,
+            },
         }
         
         try:
@@ -314,14 +319,18 @@ class ETLPipeline:
                 self.main_logger.info("="*60)
                 self.main_logger.info(f"PROGRAMME {i}/{len(major_programmes)}: {programme.name}")
                 self.main_logger.info(f"Expected records: {programme.record_count:,}")
-                self.main_logger.info("="*60)
-                    
+                # self.main_logger.info("="*60)
+
                 if not self.programme_needs_project_fetch(programme):
+                    results["programmes_skipped"] += 1
                     self.main_logger.info(
-                        f"Skipping projects for {programme.name}: "
-                        "published count satisfies facet count"
+                        "SKIPPED: database already contains the expected project count"
                     )
+                    results['programmes_processed'] += 1
                     continue
+
+                # if programme_needs_project_fetch prepare for extraction
+                programme_start = time.time()
 
                 # Drop the current staging table
                 self.project_sink.start_fresh_load(programme)
@@ -332,44 +341,45 @@ class ETLPipeline:
                     'projects',
                 )
                 results["extraction_results"].append(extraction_result)
-                results["timing"]["extraction"] += (
-                    extraction_result.extraction_time
-                )
 
                 if extraction_result.record_count > 0:
-
-                    self.main_logger.info(
-                        f"Publishing {extraction_result.record_count:,} staged projects "
-                        f"for {programme.name}"
-                    )
-                    publish_start = time.time()
 
                     publish_result = self.project_sink.publish_programme_staging(
                         self.config.projects_staging_table,
                         self.config.projects_published_table,
                     )
 
-                    publish_time = time.time() - publish_start
-
                     staged_count = publish_result["staged"]
-                    status = (
-                        "complete"
-                        if staged_count == programme.record_count
-                        else "partial"
-                    )
+                    elapsed = time.time() - programme_start
+
+                    if staged_count == programme.record_count:
+                        results["programmes_complete"] += 1
+                        status = "COMPLETE"
+                    else:
+                        results["programmes_partial"] += 1
+                        status = "PARTIAL"
+                    
+                    results["projects_inserted"] += publish_result["inserted"]
 
                     self.main_logger.info(
-                        f"Project publish for {programme.name}: "
-                        f"S={staged_count}, F={programme.record_count}, "
-                        f"inserted={publish_result['inserted']}, "
-                        f"invalid={publish_result['invalid']}, "
-                        f"duplicates={publish_result['duplicate_staged']}, "
-                        f"P={publish_result['published']} ({status}) in {publish_time:.1f}s"
+                        f"{status}: {programme.name} — "
+                        f"expected={programme.record_count:,}, "
+                        f"database_total={publish_result['published']:,}, "
+                        f"inserted={publish_result['inserted']:,}, "
+                        f"time={elapsed:.1f}s"
                     )
 
-                    results["total_records"] += (
-                        extraction_result.record_count
-                    )
+                    if publish_result["invalid"] or publish_result["duplicate_staged"]:
+                        self.main_logger.warning(
+                            f"Database update issues for {programme.name}: "
+                            f"invalid={publish_result['invalid']:,}, "
+                            f"staging_duplicates={publish_result['duplicate_staged']:,}"
+                        )
+
+                    results["projects_inserted"] += publish_result['inserted']
+
+                else: # extraction_result.record_count == 0
+                    results["programmes_failed"] += 1
 
                 results['programmes_processed'] += 1
             
@@ -385,46 +395,82 @@ class ETLPipeline:
             self._log_final_summary(results)
         
         return results
-    
+
     def _log_final_summary(self, results: Dict[str, Any]):
-        """Log comprehensive pipeline summary."""
         self.main_logger.info("="*80)
+        """Log pipeline outcome summary."""
+        processed = results["programmes_processed"]
+
+        def outcome(name):
+            count = results[name]
+            percentage = count / processed * 100 if processed else 0
+            return f"{count}/{processed} ({percentage:.1f}%)"
+
         self.main_logger.info("ETL PIPELINE COMPLETED")
-        self.main_logger.info("="*80)
-        
-        # Performance summary
-        timing = results['timing']
-        self.main_logger.info("PERFORMANCE SUMMARY:")
-        self.main_logger.info(f"   Total execution time: {timing['total']:.1f}s")
-        self.main_logger.info(f"   Extraction time: {timing['extraction']:.1f}s ({timing['extraction']/timing['total']*100:.1f}%)")
-        
-        # Data summary
-        self.main_logger.info("DATA SUMMARY:")
-        self.main_logger.info(f"   Programmes processed: {results['programmes_processed']}")
-        self.main_logger.info(f"   Total records: {results['total_records']:,}")
-
-        # Success rates
-        successful_extractions = sum(
-            1 for r in results["extraction_results"] if r.success
-        )
-
-        extraction_total = len(results["extraction_results"])
-
-        extraction_rate = (
-            f"{successful_extractions / extraction_total * 100:.1f}%"
-            if extraction_total
-            else "n/a"
-        )
-
-        self.main_logger.info("SUCCESS RATES:")
         self.main_logger.info(
-            f"   Extraction success: "
-            f"{successful_extractions}/{extraction_total} "
-            f"({extraction_rate})"
+            f"Total execution time: {results['timing']['total']:.1f}s"
+        )
+        self.main_logger.info(f"Programmes processed: {processed}")
+
+        self.main_logger.info("="*60)
+        self.main_logger.info(
+                    f"Skipped as complete: {outcome('programmes_skipped')}"
+                )
+        self.main_logger.info(
+            f"Completely extracted: {outcome('programmes_complete')}"
+        )
+        self.main_logger.info(
+            f"Partially extracted: {outcome('programmes_partial')}"
+        )
+        self.main_logger.info(
+            f"Failed: {outcome('programmes_failed')}"
+        )
+        self.main_logger.info(
+            f"Projects newly inserted: {results['projects_inserted']:,}"
         )
 
+        self.main_logger.info("="*60)
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Log file: {self.logger.log_file}")
+
+    
+    # def _log_final_summary(self, results: Dict[str, Any]):
+    #     """Log comprehensive pipeline summary."""
+    #     self.main_logger.info("="*80)
+    #     self.main_logger.info("ETL PIPELINE COMPLETED")
+    #     self.main_logger.info("="*80)
+        
+    #     # Performance summary
+    #     timing = results['timing']
+    #     self.main_logger.info("PERFORMANCE SUMMARY:")
+    #     self.main_logger.info(f"   Total execution time: {timing['total']:.1f}s")
+    #     # self.main_logger.info(f"   Extraction time: {timing['extraction']:.1f}s ({timing['extraction']/timing['total']*100:.1f}%)")
+        
+    #     # Data summary
+    #     self.main_logger.info("DATA SUMMARY:")
+    #     self.main_logger.info(f"   Programmes processed: {results['programmes_processed']}")
+    #     self.main_logger.info(f"   Projects newly inserted: {results['projects_inserted']:,}")
+
+    #     # Success rates
+    #     successful_extractions = sum(
+    #         1 for r in results["extraction_results"] if r.success
+    #     )
+
+    #     extraction_total = len(results["extraction_results"])
+
+    #     extraction_rate = (
+    #         f"{successful_extractions / extraction_total * 100:.1f}%"
+    #         if extraction_total
+    #         else "n/a"
+    #     )
+
+    #     self.main_logger.info("SUCCESS RATES:")
+    #     self.main_logger.info(
+    #         f"   Extraction success: "
+    #         f"{successful_extractions}/{extraction_total} "
+    #         f"({extraction_rate})"
+    #     )
+
 
 def main():
     """Main entry point for the ETL pipeline."""
