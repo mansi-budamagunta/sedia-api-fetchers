@@ -66,7 +66,6 @@ class ETLLogger:
     def __init__(self, config: ETLConfig):
         self.config = config
         self.setup_logging()
-        self.setup_change_logging()
     
     def setup_logging(self):
         """Set up main logging."""
@@ -87,25 +86,6 @@ class ETLLogger:
         self.main_logger = logging.getLogger('etl_pipeline')
         self.log_file = log_file
     
-    def setup_change_logging(self):
-        """Set up change tracking logging."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        change_log_file = self.config.logs_dir / f"etl_changes_{timestamp}.log"
-        
-        self.change_logger = logging.getLogger('etl_changes')
-        self.change_logger.setLevel(logging.INFO)
-        
-        # Remove existing handlers
-        for handler in self.change_logger.handlers[:]:
-            self.change_logger.removeHandler(handler)
-        
-        change_handler = logging.FileHandler(change_log_file)
-        change_formatter = logging.Formatter('%(asctime)s - %(message)s')
-        change_handler.setFormatter(change_formatter)
-        self.change_logger.addHandler(change_handler)
-        
-        self.change_log_file = change_log_file
-
 class ETLExtractor:
     """Extract phase - Fetch raw data from SEDIA APIs."""
     
@@ -208,14 +188,6 @@ class ETLExtractor:
                     f"in {extraction_time:.1f}s"
                 )
 
-                # if abs(rows_written - programme.record_count) > (
-                #         programme.record_count * 0.1
-                #     ):
-                #     self.main_logger.warning(
-                #         f"Record count mismatch: expected "
-                #         f"{programme.record_count:,}, got {rows_written:,}"
-                #     )
-
                 return ExtractionResult(
                     programme=programme,
                     endpoint=endpoint,
@@ -277,7 +249,6 @@ class ETLPipeline:
         )
         
         self.main_logger = self.logger.main_logger
-        self.change_logger = self.logger.change_logger
 
     def check_database_connection(self):
         """Confirm database availability before making API requests."""
@@ -321,7 +292,6 @@ class ETLPipeline:
         # Initialize results tracking
         results = {
             'programmes_processed': 0,
-            'endpoints_processed': 0,
             'total_records': 0,
             'extraction_results': [],
             'timing': {
@@ -403,8 +373,6 @@ class ETLPipeline:
 
                 results['programmes_processed'] += 1
             
-            results['endpoints_processed'] = len(results['extraction_results'])
-            
         except Exception as e:
             self.main_logger.error(f"Pipeline failed: {e}")
             raise
@@ -433,7 +401,6 @@ class ETLPipeline:
         # Data summary
         self.main_logger.info("DATA SUMMARY:")
         self.main_logger.info(f"   Programmes processed: {results['programmes_processed']}")
-        self.main_logger.info(f"   Endpoints processed: {results['endpoints_processed']}")
         self.main_logger.info(f"   Total records: {results['total_records']:,}")
 
         # Success rates
@@ -457,8 +424,7 @@ class ETLPipeline:
         )
 
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.main_logger.info(f"Main log: {self.logger.log_file}")
-        self.main_logger.info(f"Change log: {self.logger.change_log_file}")
+        self.main_logger.info(f"Log file: {self.logger.log_file}")
 
 def main():
     """Main entry point for the ETL pipeline."""
