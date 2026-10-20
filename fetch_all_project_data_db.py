@@ -20,11 +20,11 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 # Add current directory to path for imports
-current_dir = Path(__file__).resolve().parent
-sys.path.insert(0, str(current_dir))
+script_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(script_dir))
 
 # Ensure that the db_url is set
-load_dotenv(current_dir / ".env")
+load_dotenv(script_dir / ".env")
 db_url = os.environ.get("SEDIA_DB_URL")
 if not db_url:
     # print(db_url)
@@ -36,7 +36,6 @@ if not db_url:
 @dataclass
 class ETLConfig:
     """Configuration for the ETL pipeline."""
-    data_dir: Path
     logs_dir: Path
     db_url: str = field(repr=False)
     projects_staging_table: str = "raw_projects_staging"
@@ -464,9 +463,8 @@ class ETLPipeline:
 def main():
     """Main entry point for the ETL pipeline."""
     # Set up configuration
-    base_dir = current_dir
+    base_dir = script_dir
     config = ETLConfig(
-        data_dir=base_dir / "data",
         logs_dir=base_dir / "logs",
         db_url=db_url,
         min_record_threshold=1,
@@ -474,7 +472,6 @@ def main():
     )
     
     # Ensure directories exist
-    config.data_dir.mkdir(exist_ok=True)
     config.logs_dir.mkdir(exist_ok=True)
     
     # Run the ETL pipeline
