@@ -14,7 +14,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 import math
 from tqdm.auto import tqdm
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 from typing import Any, List, Union
 from abc import ABC, abstractmethod
@@ -531,8 +531,8 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         date_format = "%Y-%m-%dT%H:%M:%S.%f"
         
         try:
-            min_date = datetime.strptime(min_date_str.split('+')[0], date_format)
-            max_date = datetime.strptime(max_date_str.split('+')[0], date_format)
+            min_date = datetime.fromisoformat(min_date_str).astimezone(timezone.utc)
+            max_date = datetime.fromisoformat(max_date_str).astimezone(timezone.utc)
         except ValueError as e:
             print(f"Error parsing dates: {e}")
             print("Falling back to non-partitioned fetch")
@@ -558,8 +558,8 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
                         {
                             "range": {
                                 "es_SortDate": {
-                                    "gte": start_date.strftime(date_format)[:-3] + "Z",
-                                    "lte": end_date.strftime(date_format)[:-3] + "Z",
+                                    "gte": start_date.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                                    "lte": end_date.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                                 }
                             }
                         }
