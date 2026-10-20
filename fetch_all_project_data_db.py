@@ -62,18 +62,18 @@ class ExtractionResult:
 
 class ETLLogger:
     """Centralized logging for the ETL pipeline."""
-    
+
     def __init__(self, config: ETLConfig):
         self.config = config
         self.setup_logging()
-    
+
     def setup_logging(self):
         """Set up main logging."""
         self.config.logs_dir.mkdir(exist_ok=True)
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = self.config.logs_dir / f"etl_pipeline_{timestamp}.log"
-        
+
         logging.basicConfig(
             level=getattr(logging, self.config.log_level),
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -82,13 +82,13 @@ class ETLLogger:
                 logging.StreamHandler(sys.stdout)
             ]
         )
-        
+
         self.main_logger = logging.getLogger('etl_pipeline')
         self.log_file = log_file
-    
+
 class ETLExtractor:
     """Extract phase - Fetch raw data from SEDIA APIs."""
-    
+
     def __init__(
         self,
         logger: ETLLogger,
@@ -104,7 +104,7 @@ class ETLExtractor:
         try:
             from sedia_api_fetchers.EUFT_retrieve_projects import SEDIA_GET_PROJECTS
             from sedia_api_fetchers.EUFT_retrieve_facets import SEDIA_GET_FACETS
-            
+
             self.projects_fetcher = SEDIA_GET_PROJECTS
 
             self.facet_fetcher = SEDIA_GET_FACETS
@@ -113,7 +113,7 @@ class ETLExtractor:
         except ImportError as e:
             self.main_logger.error(f"Failed to import fetchers: {e}")
             raise
-    
+
     def extract_programme_metadata(self, config: ETLConfig) -> List[ProgrammeMetadata]:
         """Extract programme metadata from facet data."""
         self.main_logger.info("EXTRACT PHASE: Fetching current programme metadata from facets API")
@@ -123,7 +123,7 @@ class ETLExtractor:
 
         if not facet_data:
             raise RuntimeError("No facet data returned by the facets API")
-        
+
         programmes = []
         for facet in facet_data.get('facets', []):
             if facet.get('name') == 'programId':
@@ -131,7 +131,7 @@ class ETLExtractor:
                     programme_id = int(prog['rawValue'])
                     programme_name = prog['value']
                     record_count = prog['count']
-                    
+
                     programmes.append(ProgrammeMetadata(
                         id=programme_id,
                         name=programme_name,
@@ -139,10 +139,10 @@ class ETLExtractor:
                     ))
                 # Once the 'programId' facet is found & processed, exit the outer loop to skip the rest of the facets
                 break
-        
+
         # Sort by record count (descending)
         # programmes.sort(key=lambda x: x.record_count, reverse=True)
-        
+
         # Sort by record count (ascending)
         programmes.sort(key=lambda x: x.record_count)
 
@@ -150,18 +150,18 @@ class ETLExtractor:
         self.main_logger.info(f"Extracted facet data for {len(programmes)} programmes in {extraction_time:.1f}s")
         self.main_logger.info("="*80)
 
-        
+
         return programmes
-    
+
     def extract_programme_data(self, programme: ProgrammeMetadata, endpoint: str) -> ExtractionResult:
         """Extract data for a specific programme and endpoint."""
         start_time = time.time()
         self.main_logger.info(f"EXTRACT: {endpoint} for {programme.name} (ID: {programme.id})")
-        
+
         # Check if this programme might exceed API limits
         if programme.record_count > 10000:
             self.main_logger.warning(f"Large dataset detected ({programme.record_count:,} records) - using date partitioning strategy")
-        
+
         try:
             fetcher_class = self.projects_fetcher
 
@@ -230,7 +230,7 @@ class ETLExtractor:
 
 class ETLPipeline:
     """Main ETL Pipeline orchestrator."""
-    
+
     def __init__(self, config: ETLConfig):
         self.config = config
         self.logger = ETLLogger(config)
@@ -244,7 +244,7 @@ class ETLPipeline:
             self.logger,
             project_sink=self.project_sink,
         )
-        
+
         self.main_logger = self.logger.main_logger
 
     def check_database_connection(self):
@@ -275,17 +275,17 @@ class ETLPipeline:
 
         return published_count < programme.record_count
 
-    
+
     def run(self) -> Dict[str, Any]:
         """Execute the complete ETL pipeline."""
         pipeline_start_time = time.time()
-        
+
         self.main_logger.info("="*80)
         self.main_logger.info("ETL PIPELINE STARTING")
         self.main_logger.info("="*80)
         self.main_logger.info(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Configuration: {self.config}")
-        
+
         # Initialize results tracking
         results = {
             "programmes_processed": 0,
@@ -300,16 +300,16 @@ class ETLPipeline:
                 "total": 0,
             },
         }
-        
+
         try:
             # EXTRACT: Get programme metadata
             programmes = self.extractor.extract_programme_metadata(self.config)
             major_programmes = [p for p in programmes if p.record_count >= self.config.min_record_threshold]
 
             self.check_database_connection()
-            
+
             self.main_logger.info(f"Processing {len(major_programmes)} programmes (>={self.config.min_record_threshold} records) out of {len(programmes)} total programmes")
-            
+
             # Process each programme
             for i, programme in enumerate(major_programmes, 1):
                 self.main_logger.info("="*60)
@@ -354,7 +354,7 @@ class ETLPipeline:
                     else:
                         results["programmes_partial"] += 1
                         status = "PARTIAL"
-                    
+
                     results["projects_inserted"] += publish_result["inserted"]
                     results["projects_updated"] += publish_result['updated']
 
@@ -378,18 +378,18 @@ class ETLPipeline:
                     results["programmes_failed"] += 1
 
                 results['programmes_processed'] += 1
-            
+
         except Exception as e:
             self.main_logger.error(f"Pipeline failed: {e}")
             raise
-        
+
         finally:
             # Calculate final timing
             results['timing']['total'] = time.time() - pipeline_start_time
-            
+
             # Log final summary
             self._log_final_summary(results)
-        
+
         return results
 
     def _log_final_summary(self, results: Dict[str, Any]):
@@ -426,7 +426,7 @@ class ETLPipeline:
         )
         self.main_logger.info(
             f"Projects updated: {results['projects_updated']:,}"
-        )   
+        )
 
         self.main_logger.info("="*60)
         self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -442,10 +442,10 @@ def main():
         min_record_threshold=1,
         log_level="INFO",
     )
-    
+
     # Ensure directories exist
     config.logs_dir.mkdir(exist_ok=True)
-    
+
     # Run the ETL pipeline
     pipeline = ETLPipeline(config)
     pipeline.run()
