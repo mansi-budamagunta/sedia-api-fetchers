@@ -112,6 +112,16 @@ class DatabaseSink:
                         f'SELECT * FROM "{staging_table}" WHERE 1 = 0'
                     ))
 
+                # Create indexes for faster insertion
+                connection.execute(text(
+                    f'CREATE INDEX IF NOT EXISTS "ix_{published_table}_reference" '
+                    f'ON "{published_table}" ("reference")'
+                ))
+                connection.execute(text(
+                    f'CREATE INDEX IF NOT EXISTS "ix_{published_table}_programme_id" '
+                    f'ON "{published_table}" ("programme_id")'
+                ))
+
                 staged = connection.execute(
                     text(f"""
                         SELECT COUNT(*)
