@@ -22,15 +22,15 @@ from abc import ABC, abstractmethod
 class SEDIABaseFetcher(ABC):
     """
     Abstract base class for all SEDIA API fetchers.
-    
+
     Provides common functionality like session management, programme ID handling,
     data processing, and file operations while allowing endpoint-specific implementations.
     """
-    
+
     # Common base URLs and configuration
     SCHEME = "https://"
     HOST = "api.tech.ec.europa.eu"
-    
+
     # Common programme IDs mapping (shared across all fetchers)
     PROGRAMME_IDS = {
         # Common short names for major programmes
@@ -46,7 +46,7 @@ class SEDIABaseFetcher(ABC):
         'cosme': 31059643,
         'cef': 43251567,
         'rec': 31076817,
-        
+
         # Complete list from facet data
         '1st_health_programme_1hp': 111109,
         '2nd_health_programme_2hp': 111110,
@@ -107,14 +107,14 @@ class SEDIABaseFetcher(ABC):
         'union_civil_protection_mechanism_ucpm': 43298203,
         'union_civil_protection_mechanism_ucpm_2014_2020': 31082527
     }
-    
+
     # Common API configuration
     API_FETCH_LIMIT = 10000
-    
+
     def __init__(self, flatten_metadata: bool = True, **kwargs):
         """
         Initialize the base fetcher.
-        
+
         Args:
             flatten_metadata (bool): Whether to flatten complex metadata structures
             **kwargs: Additional configuration options for specific fetchers
@@ -122,18 +122,18 @@ class SEDIABaseFetcher(ABC):
         self.flatten_metadata = flatten_metadata
         self.session = self._setup_session()
         self.pbar = None
-        
+
         # Data directory setup
         self.current_working_directory = pathlib.Path.cwd()
         self.DATA_DIR = self.current_working_directory / "data"
-        
+
         # Ensure data directory exists
         self.DATA_DIR.mkdir(exist_ok=True)
-        
+
         # Endpoint-specific configuration must be set by subclasses
         if not hasattr(self, 'API_KEY'):
             raise NotImplementedError("Subclasses must define API_KEY")
-    
+
     def _setup_session(self) -> requests.Session:
         """Configure a requests session with automatic retries for server errors."""
         retry_setup = Retry(
@@ -145,11 +145,11 @@ class SEDIABaseFetcher(ABC):
         session = requests.Session()
         session.mount(self.SCHEME, adapter)
         return session
-    
+
     def _normalize_programme_input(self, programmes) -> list[int]:
         """
         Normalize programme input to a list of programme IDs.
-        
+
         Args:
             programmes: Can be:
                 - Single string (programme name): 'h2020'
@@ -157,17 +157,17 @@ class SEDIABaseFetcher(ABC):
                 - List of strings: ['h2020', 'horizon']
                 - List of ints: [31045243, 43108390]
                 - Mixed list: ['h2020', 43108390]
-                
+
         Returns:
             list[int]: List of programme IDs
-            
+
         Raises:
             ValueError: If programme name is not found in PROGRAMME_IDS
         """
         # Convert single values to list
         if isinstance(programmes, (str, int)):
             programmes = [programmes]
-        
+
         programme_ids = []
         for prog in programmes:
             if isinstance(prog, str):
@@ -187,9 +187,9 @@ class SEDIABaseFetcher(ABC):
                     raise ValueError(f"Programme ID {prog} not found. Available IDs: {available_ids}")
             else:
                 raise ValueError(f"Programme must be string or int, got {type(prog)}: {prog}")
-        
+
         return programme_ids
-    
+
     def _apply_unwrapping_to_chunk(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Apply basic unwrapping and cleaning to a data chunk during fetching.
@@ -226,24 +226,24 @@ class SEDIABaseFetcher(ABC):
 
         df = Functions.clean_empty_containers(df)
         return df
-    
+
     def _save_data(self, df: pd.DataFrame, filename_prefix: str, **kwargs) -> str:
         """
         Save DataFrame to CSV with timestamped filename.
-        
+
         Args:
             df (pd.DataFrame): DataFrame to save
             filename_prefix (str): Prefix for the filename
             **kwargs: Additional parameters for filename construction
-            
+
         Returns:
             str: Path to saved file
         """
         if df.empty:
             raise ValueError("Cannot save empty DataFrame")
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         # Construct filename with parameters
         filename_parts = [filename_prefix]
         for key, value in kwargs.items():
@@ -252,20 +252,20 @@ class SEDIABaseFetcher(ABC):
                     filename_parts.append('_'.join(map(str, value)))
                 else:
                     filename_parts.append(str(value))
-        
+
         filename_parts.append(timestamp)
         final_filename = '_'.join(filename_parts) + '.csv'
-        
+
         output_file = str(self.DATA_DIR / final_filename)
         df.to_csv(output_file, index=False)
-        
+
         file_size = os.path.getsize(output_file) / (1024*1024)
         print(f"Total records: {len(df)}")
         print(f"File size: {file_size:.1f} MB")
         print(f"[SUCCESS] data saved to {output_file}")
-        
+
         return output_file
-    
+
     def _get_basic_metadata(self, query: dict, sort: dict) -> tuple[int, str | None, str | None]:
         """
         Get basic metadata (total results) for a query.
@@ -278,7 +278,7 @@ class SEDIABaseFetcher(ABC):
 
         total_results = data_desc.get("totalResults", 0)
         return total_results, None, None
-    
+
     def _apply_metadata_flattening(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply metadata flattening if enabled."""
         if self.flatten_metadata and not df.empty:
@@ -293,7 +293,7 @@ class SEDIABaseFetcher(ABC):
                 from helpers.functions import Functions
             df = Functions.flatten_dataframe_metadata(df)
         return df
-    
+
     def _clean_final_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply final cleaning to the dataset."""
         if not df.empty:
@@ -307,34 +307,34 @@ class SEDIABaseFetcher(ABC):
                 from helpers.functions import Functions
             df = Functions.clean_empty_containers(df)
         return df
-    
+
     @abstractmethod
     def query_api(self, query: dict, sort: dict, page_num: int = 1, page_size: int = 100) -> dict:
         """
         Execute a query against the specific API endpoint.
-        
+
         This method must be implemented by each subclass as different endpoints
         have different request formats (POST vs GET, different parameters, etc.).
-        
+
         Args:
             query (dict): The search query parameters
             sort (dict): The sorting parameters
             page_num (int): Page number for pagination
             page_size (int): Number of results per page
-            
+
         Returns:
             dict: JSON response from the API
         """
         pass
-    
+
     @abstractmethod
     def get(self, *args, **kwargs) -> pd.DataFrame:
         """
         Main method to fetch and process data.
-        
+
         This method must be implemented by each subclass as the parameters
         and processing logic vary by endpoint.
-        
+
         Returns:
             pd.DataFrame: Processed data
         """
@@ -344,26 +344,26 @@ class SEDIABaseFetcher(ABC):
 class SEDIAPaginatedFetcher(SEDIABaseFetcher):
     """
     Base class for fetchers that use standard pagination with POST requests.
-    
+
     This covers most SEDIA endpoints that use the search API with form data.
     Includes automatic date range partitioning for datasets larger than API_FETCH_LIMIT.
     """
-    
+
     def __init__(self, flatten_metadata: bool = True, **kwargs):
         super().__init__(flatten_metadata=flatten_metadata, **kwargs)
-        
+
         # Set up search API URL - subclasses can override if needed
         self.SEARCH_API_BASE = f"{self.SCHEME}{self.HOST}/search-api/prod/rest/search"
-    
+
     def query_api(self, query: dict, sort: dict, page_num: int = 1, page_size: int = 100) -> dict:
         """
         Standard implementation for POST-based search API queries.
-        
+
         This works for most SEDIA endpoints that use form data submission.
         """
         headers = {
             "apiKey": self.API_KEY,
-            "text": "***", 
+            "text": "***",
             "pageSize": str(page_size),
             "pageNumber": str(page_num),
         }
@@ -372,7 +372,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             "sort": ("blob", json.dumps(sort), "application/json"),
             "languages": ("blob", json.dumps(["en"]), "application/json"),
         }
-        
+
         try:
             response = self.session.post(self.SEARCH_API_BASE, params=headers, files=form_data)
             response.raise_for_status()
@@ -382,7 +382,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             if hasattr(e, 'response') and e.response is not None:
                 print(f"Response content: {e.response.text}")
             return {}
-    
+
     def _get_metadata_with_date_range(self, query: dict) -> tuple[int, str | None, str | None]:
         """
         Gets total results, the earliest date, and the latest date for a given query.
@@ -420,7 +420,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         if not data_asc or 'results' not in data_asc or not data_asc['results']:
             print("Warning: Could not retrieve the oldest record to determine the date range. Falling back to basic metadata.")
             return self._get_basic_metadata(query, sort_desc)
-             
+
         oldest_record = data_asc["results"][0]
         min_date_str = get_date_from_record(oldest_record)
         if not min_date_str:
@@ -428,7 +428,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             return self._get_basic_metadata(query, sort_desc)
 
         return total_results, min_date_str, max_date_str
-    
+
     def fetch_all_records_with_partitioning(
         self,
         query: dict,
@@ -440,7 +440,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
         Fetches all records for a given query. Automatically detects if
         the dataset is larger than API_FETCH_LIMIT and partitions the request by
         date range if necessary.
-        
+
         Args:
             query (dict): The search query.
             sort (dict): Sort parameters (defaults to `es_SortDate` descending).
@@ -460,9 +460,9 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 
         if sort is None:
             sort = {"field": "es_SortDate", "order": "DESC"}
-        
+
         print(f"Starting fetch with partitioning support...")
-        
+
         # Try to get metadata with date range for partitioning
         total_records, min_date_str, max_date_str = self._get_metadata_with_date_range(query)
 
@@ -471,7 +471,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             return pd.DataFrame() if return_df else None
 
         print(f"Found {total_records:,} total records")
-        
+
         # If we have date range info and total exceeds limit, use date partitioning
         if total_records > self.API_FETCH_LIMIT and min_date_str and max_date_str:
             print(f"Dataset exceeds {self.API_FETCH_LIMIT:,} limit. Using date range partitioning...")
@@ -480,7 +480,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
                 query, sort, total_records, min_date_str, max_date_str,
                 database_sink=database_sink, return_df=return_df,
             )
-        
+
         # If total is within the API's limit, fetch it in one go
         elif total_records <= self.API_FETCH_LIMIT:
             print("Total is within limit, fetching directly.")
@@ -492,7 +492,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             )
             self.pbar.close()
             return df
-        
+
         # If we can't get date range but exceed limit, fetch what we can
         else:
             print(f"Warning: Dataset exceeds {self.API_FETCH_LIMIT:,} limit but no date range available.")
@@ -504,7 +504,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             )
             self.pbar.close()
             return df
-    
+
     def _fetch_with_date_partitioning(
         self,
         base_query: dict,
@@ -517,20 +517,20 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
     ) -> pd.DataFrame | None:
         """
         Fetch data using recursive date range partitioning.
-        
+
         Args:
             base_query: Base query without date constraints
             sort: Sort parameters
             total_records: Total expected records
             min_date_str: Earliest date in dataset
             max_date_str: Latest date in dataset
-            
+
         Returns:
             pd.DataFrame: All fetched records
         """
         all_dfs = []
         date_format = "%Y-%m-%dT%H:%M:%S.%f"
-        
+
         try:
             min_date = datetime.fromisoformat(min_date_str).astimezone(timezone.utc)
             max_date = datetime.fromisoformat(max_date_str).astimezone(timezone.utc)
@@ -610,7 +610,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
             print(f"Warning: Record count difference > 5%. Expected: {total_records:,}, Got: {len(final_df):,}")
 
         return final_df
-    
+
     def _fetch_paginated_chunk(
         self,
         query: dict,
@@ -634,7 +634,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
                 results = data["results"]
                 fetched_count += len(results)
                 page_df = pd.DataFrame(results)
-                
+
                 if not page_df.empty:
                     page_df = self._apply_unwrapping_to_chunk(page_df)
                     page_df = self._apply_metadata_flattening(page_df)
@@ -647,7 +647,7 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
                         page_dfs.append(page_df)
 
                 chunk_pbar.update(len(results))
-                
+
                 print(f"[DEBUG] Page {page} → {len(results)} hits")
             else:
                 print(f"Warning: Failed to fetch page {page} for query {json.dumps(query)}")
@@ -671,30 +671,30 @@ class SEDIAPaginatedFetcher(SEDIABaseFetcher):
 class SEDIASimpleFetcher(SEDIABaseFetcher):
     """
     Base class for fetchers that use simple GET requests.
-    
+
     This covers endpoints like the topic details API that use URL parameters.
     """
-    
+
     def __init__(self, flatten_metadata: bool = True, **kwargs):
         super().__init__(flatten_metadata=flatten_metadata, **kwargs)
-        
+
         # Set up search API URL - subclasses can override if needed
         self.SEARCH_API_BASE = f"{self.SCHEME}{self.HOST}/search-api/prod/rest/search"
-    
+
     def query_api(self, query: dict, sort: dict = None, page_num: int = 1, page_size: int = 100) -> dict:
         """
         Simple implementation for GET-based API queries.
-        
+
         This works for endpoints that use URL parameters instead of form data.
         Note: query parameter might be used differently (e.g., as search text).
         """
         params = {
             "apiKey": self.API_KEY,
         }
-        
+
         # Add query-specific parameters - subclasses should override this method
         # to handle their specific parameter requirements
-        
+
         try:
             response = self.session.get(self.SEARCH_API_BASE, params=params)
             response.raise_for_status()

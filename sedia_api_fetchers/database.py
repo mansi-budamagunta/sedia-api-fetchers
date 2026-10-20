@@ -41,7 +41,7 @@ class DatabaseSink:
         )
 
         self.rows_written += len(page_df)
- 
+
     def start_fresh_load(self, programme):
         """Start a new staging load for one programme."""
         with self.engine.begin() as connection:
@@ -245,4 +245,4 @@ class DatabaseSink:
             "inserted": distinct_valid - existing,
             "updated": existing,
             "published": published_after,
-        }      
+        }
