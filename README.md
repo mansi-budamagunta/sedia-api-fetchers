@@ -45,6 +45,10 @@ Alternatively, set it in the shell:
 
 ```bash
 export SEDIA_DB_URL="postgresql+psycopg://username:password@localhost:5432/database_name"
+```
+
+Then run the script:
+```
 python fetch_all_project_data_db.py
 ```
 
