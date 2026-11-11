@@ -231,7 +231,7 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
 
         """
         Fetches all records for given programmes using the base class partitioning logic.
-        
+
         Args:
             programmes: Programme names or IDs. Can be:
                 - Single string: 'h2020'
@@ -239,17 +239,27 @@ class SEDIA_GET_PROJECTS(SEDIAPaginatedFetcher):
                 - List of strings: ['h2020', 'horizon']
                 - List of ints: [31045243, 43108390]
                 - Mixed list: ['h2020', 43108390]
-            database_sink: database_sink: Optional object exposing write_batch(df), called once for
-                    each transformed page DataFrame.
-            return_df: Whether to accumulate and return a dataframe. Requires
-                `database_sink` when `False`.
+            database_sink: Optional sink implementing write_programme_batch(df).
+                The partitioning pipeline passes each transformed page to it.
+                When supplied, it must already be initialized for the single
+                programme requested.
+            return_df: Whether to accumulate and return the fetched records.
+                If False, database_sink is required.
 
-        Returns:
-            pd.DataFrame | None: Project records when `return_df=True`;
-            otherwise `None`.
-
+         Returns:
+            A DataFrame of project records if return_df is True; otherwise None.
         """
+
         program_ids = self._normalize_programme_input(programmes)
+
+        if database_sink is not None:
+            if database_sink.programme is None or database_sink.fetched_at is None:
+                raise ValueError("Initialize database_sink with start_fresh_load(programme) first")
+            if len(program_ids) != 1: raise ValueError("database_sink requires exactly one requested programme")
+            if program_ids[0] != database_sink.programme.id:
+                raise ValueError(f"Requested programme {program_ids[0]} does not match sink programme {database_sink.programme.id}")
+
+
         print(f"Starting fetch for programme IDs: {program_ids}...")
         
         base_query = {"bool": {"must": [{"terms": {"programId": [str(pid) for pid in program_ids]}}]}}
