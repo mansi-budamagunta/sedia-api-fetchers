@@ -254,27 +254,14 @@ class ETLPipeline:
             connection.execute(text("SELECT 1"))
         self.main_logger.info("Database connection successful")
 
-
-    def programme_needs_project_fetch(
-        self,
-        programme: ProgrammeMetadata,
-    ) -> bool:
-        """Return whether published projects are fewer than the facet count."""
-        published_count = self.project_sink.count_programme_rows(
-            programme.id,
-            self.config.projects_published_table,
-        )
-
+    def programme_needs_project_fetch(self, programme: ProgrammeMetadata) -> bool:
+        "Return whether published projects are fewer than the facet count."
+        published_count = self.project_sink.count_rows(table_name=self.config.projects_published_table, programme_id=programme.id)
         if published_count > programme.record_count:
             self.main_logger.warning(
-                f"Published project count exceeds facet count for "
-                f"{programme.name}: "
-                f"P={published_count}, F={programme.record_count}"
-            )
-            return False
-
+                f"Published project count exceeds facet count for {programme.name}: "
+                f"P={published_count}, F={programme.record_count}")
         return published_count < programme.record_count
-
 
     def run(self) -> Dict[str, Any]:
         """Execute the complete ETL pipeline."""
@@ -302,11 +289,11 @@ class ETLPipeline:
         }
 
         try:
+            self.check_database_connection()
+
             # EXTRACT: Get programme metadata
             programmes = self.extractor.extract_programme_metadata(self.config)
             major_programmes = [p for p in programmes if p.record_count >= self.config.min_record_threshold]
-
-            self.check_database_connection()
 
             self.main_logger.info(f"Processing {len(major_programmes)} programmes (>={self.config.min_record_threshold} records) out of {len(programmes)} total programmes")
 
@@ -319,9 +306,7 @@ class ETLPipeline:
 
                 if not self.programme_needs_project_fetch(programme):
                     results["programmes_skipped"] += 1
-                    self.main_logger.info(
-                        "SKIPPED: database already contains the expected project count"
-                    )
+                    self.main_logger.info("SKIPPED: database project count meets or exceeds the facet count")
                     results['programmes_processed'] += 1
                     continue
 
