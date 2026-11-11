@@ -15,12 +15,14 @@ def sql_safe_df(df: pd.DataFrame) -> pd.DataFrame:
 class DatabaseSink:
     """Write batches of raw API records to a fresh database table."""
 
-    def __init__(self, db_url: str, table_name: str):
-        self.db_url = db_url
-        self.table_name = table_name
-        self.rows_written = 0
+    def __init__(self, db_url: str, staging_table: str):
+        "Create a reusable sink; programme state is set by start_fresh_load."
+        self.db_url,self.staging_table = db_url,staging_table
         self.engine = create_engine(db_url)
+        self.programme,self.fetched_at = None,None
+        self.rows_written = 0
         self.page_failures = []
+
 
     def write_programme_batch(self, page_df):
         """Write one transformed page with programme provenance."""
@@ -34,7 +36,7 @@ class DatabaseSink:
         )
 
         sql_safe_df(page_df).to_sql(
-            self.table_name,
+            self.staging_table,
             self.engine,
             if_exists="append",
             index=False,
@@ -46,7 +48,7 @@ class DatabaseSink:
         """Start a new staging load for one programme."""
         with self.engine.begin() as connection:
             connection.execute(
-                text(f'DROP TABLE IF EXISTS "{self.table_name}"')
+                text(f'DROP TABLE IF EXISTS "{self.staging_table}"')
             )
 
         self.programme = programme
@@ -54,37 +56,19 @@ class DatabaseSink:
         self.page_failures = []
         self.fetched_at = datetime.now(timezone.utc)
 
-    def count_rows(self, table_name: str | None = None) -> int:
-        """Return the number of rows in a table, or zero when it does not exist."""
-        table_name = table_name or self.table_name
+    def count_rows(self, table_name: str | None = None, programme_id: int | None = None) -> int:
+        "Count rows, optionally for one programme; return zero if the table is absent."
+        table_name = table_name or self.staging_table
+        if not inspect(self.engine).has_table(table_name): return 0
 
-        if not inspect(self.engine).has_table(table_name):
-            return 0
-
-        with self.engine.connect() as connection:
-            return connection.execute(
-                text(f'SELECT COUNT(*) FROM "{table_name}"')
-            ).scalar_one()
-
-    def count_programme_rows(
-        self,
-        programme_id: int,
-        table_name: str | None = None,
-    ) -> int:
-        """Return the number of rows stored for one programme."""
-        table_name = table_name or self.table_name
-
-        if not inspect(self.engine).has_table(table_name):
-            return 0
+        query = f'SELECT COUNT(*) FROM "{table_name}"'
+        params = {}
+        if programme_id is not None:
+            query += " WHERE programme_id = :programme_id"
+            params = dict(programme_id=programme_id)
 
         with self.engine.connect() as connection:
-            return connection.execute(
-                text(
-                    f'SELECT COUNT(*) FROM "{table_name}" '
-                    "WHERE programme_id = :programme_id"
-                ),
-                {"programme_id": programme_id},
-            ).scalar_one()
+            return connection.execute(text(query), params).scalar_one()
 
     def publish_programme_staging(
         self,
@@ -104,7 +88,7 @@ class DatabaseSink:
                 "inserted": 0,
                 "updated": 0,
                 "published_for_programme":
-                    self.count_programme_rows(programme_id, published_table),
+                    self.count_rows(table_name=published_table, programme_id=programme_id),
             }
 
         with self.engine.begin() as connection:
