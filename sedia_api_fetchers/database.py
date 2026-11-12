@@ -23,7 +23,6 @@ class DatabaseSink:
         self.rows_written = 0
         self.page_failures = []
 
-
     def write_programme_batch(self, page_df):
         """Write one transformed page with programme provenance."""
         if page_df.empty:
@@ -87,7 +86,7 @@ class DatabaseSink:
                 "duplicate_staged": 0,
                 "inserted": 0,
                 "updated": 0,
-                "published_for_programme":
+                "published":
                     self.count_rows(table_name=published_table, programme_id=programme_id),
             }
 
