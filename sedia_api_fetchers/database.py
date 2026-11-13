@@ -12,6 +12,8 @@ def sql_safe_df(df: pd.DataFrame) -> pd.DataFrame:
         else value
     )
 
+def _execute(connection, query, params=None): return connection.execute(text(query), params)
+
 class DatabaseSink:
     """Write batches of raw API records to a fresh database table."""
 
@@ -69,16 +71,79 @@ class DatabaseSink:
         with self.engine.connect() as connection:
             return connection.execute(text(query), params).scalar_one()
 
-    def publish_programme_staging(
-        self,
-        staging_table: str,
-        published_table: str,
-    ) -> dict[str, int]:
+    def _prepare_published(self, connection, inspector, staging_table, published_table):
+        "Ensure the published table and publication indexes exist."
+        create_sql = f'CREATE TABLE "{published_table}" AS SELECT * FROM "{staging_table}" WHERE 1 = 0'
+        if not inspector.has_table(published_table): _execute(connection, create_sql)
+
+        _execute(connection,
+            f'CREATE UNIQUE INDEX IF NOT EXISTS "ux_{published_table}_reference" '
+            f'ON "{published_table}" ("reference")')
+        _execute(connection,
+            f'CREATE INDEX IF NOT EXISTS "ix_{published_table}_programme_id" '
+            f'ON "{published_table}" ("programme_id")')
+
+    def _publication_counts(self, connection, staging_table, published_table, programme_id):
+        "Count staged rows, invalid references, distinct valid references, and existing matches."
+        params = dict(programme_id=programme_id)
+        programme_filter = 'programme_id = :programme_id'
+        valid_reference = "reference IS NOT NULL AND TRIM(reference) <> ''"
+
+        staged = _execute(connection,
+            f'SELECT COUNT(*) FROM "{staging_table}" WHERE {programme_filter}', params).scalar_one()
+        invalid = _execute(connection,
+            f'''SELECT COUNT(*) FROM "{staging_table}"
+                WHERE {programme_filter} AND (reference IS NULL OR TRIM(reference) = '')''', params).scalar_one()
+        distinct_valid = _execute(connection,
+            f'''SELECT COUNT(DISTINCT reference) FROM "{staging_table}"
+                WHERE {programme_filter} AND {valid_reference}''', params).scalar_one()
+        existing = _execute(connection,
+            f'''SELECT COUNT(DISTINCT staged.reference)
+                FROM "{staging_table}" AS staged
+                INNER JOIN "{published_table}" AS published ON published.reference = staged.reference
+                WHERE staged.programme_id = :programme_id
+                AND staged.reference IS NOT NULL AND TRIM(staged.reference) <> '' ''', params).scalar_one()
+
+        return staged,invalid,distinct_valid,existing
+
+    def _upsert_staging(self, connection, inspector, staging_table, published_table, programme_id):
+        "Insert valid staged references and refresh every non-key field on existing matches."
+        columns = [col["name"] for col in inspector.get_columns(staging_table)]
+        quoted_columns = ", ".join(f'"{col}"' for col in columns)
+        update_assignments = ", ".join(f'"{col}" = EXCLUDED."{col}"' for col in columns if col != "reference")
+
+        update_query = f'''WITH ranked_staging AS (
+                            SELECT *,
+                                -- Number rows within each reference group.
+                                -- This does not choose the newest version.
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY reference
+                                    ORDER BY reference
+                                ) AS row_number
+                            FROM "{staging_table}"
+                            WHERE programme_id = :programme_id
+                                AND reference IS NOT NULL
+                                AND TRIM(reference) <> ''
+                            )
+
+                            -- Attempt to insert one valid staged row per reference.
+                            INSERT INTO "{published_table}" ({quoted_columns})
+                            SELECT {quoted_columns}
+                            FROM ranked_staging
+                            WHERE row_number = 1
+
+                            -- If the reference already exists, refresh its non-key columns.
+                            ON CONFLICT (reference) DO UPDATE
+                            SET {update_assignments}'''
+
+        _execute(connection, update_query, dict(programme_id=programme_id))
+
+    def publish_programme_staging(self, staging_table: str, published_table: str) -> dict[str, int]:
         """Insert new projects and refresh existing projects from staging."""
         inspector = inspect(self.engine)
         programme_id = self.programme.id
 
-        # Nothing was fetched for this programme, so there is nothing to publish.
+        # If nothing was fetched for this programme, there is nothing to publish.
         if not inspector.has_table(staging_table):
             return {
                 "staged": 0,
@@ -91,135 +156,16 @@ class DatabaseSink:
             }
 
         with self.engine.begin() as connection:
-            # On the first publication, create an empty published table with the
-            # same schema as the staging table.
-            if not inspector.has_table(published_table):
-                connection.execute(text(
-                    f'CREATE TABLE "{published_table}" AS '
-                    f'SELECT * FROM "{staging_table}" WHERE 1 = 0'
-                ))
+            self._prepare_published(connection, inspector, staging_table, published_table)
 
-            # ON CONFLICT requires reference to be unique. This also makes
-            # lookups and conflict detection efficient.
-            #
-            # Use a new index name because the database may already contain the
-            # older, non-unique ix_<table>_reference index.
-            connection.execute(text(
-                f'CREATE UNIQUE INDEX IF NOT EXISTS '
-                f'"ux_{published_table}_reference" '
-                f'ON "{published_table}" ("reference")'
-            ))
+            staged,invalid,distinct_valid,existing = self._publication_counts(
+                connection, staging_table, published_table, programme_id)
 
-            connection.execute(text(
-                f'CREATE INDEX IF NOT EXISTS '
-                f'"ix_{published_table}_programme_id" '
-                f'ON "{published_table}" ("programme_id")'
-            ))
+            self._upsert_staging(connection, inspector, staging_table, published_table, programme_id)
 
-            # Count every staged row, including invalid and duplicate rows.
-            staged = connection.execute(
-                text(f"""
-                    SELECT COUNT(*)
-                    FROM "{staging_table}"
-                    WHERE programme_id = :programme_id
-                """),
-                {"programme_id": programme_id},
-            ).scalar_one()
-
-            # Rows without a usable reference cannot be safely published.
-            invalid = connection.execute(
-                text(f"""
-                    SELECT COUNT(*)
-                    FROM "{staging_table}"
-                    WHERE programme_id = :programme_id
-                    AND (reference IS NULL OR TRIM(reference) = '')
-                """),
-                {"programme_id": programme_id},
-            ).scalar_one()
-
-            # This is the number of distinct, publishable projects in staging.
-            distinct_valid = connection.execute(
-                text(f"""
-                    SELECT COUNT(DISTINCT reference)
-                    FROM "{staging_table}"
-                    WHERE programme_id = :programme_id
-                    AND reference IS NOT NULL
-                    AND TRIM(reference) <> ''
-                """),
-                {"programme_id": programme_id},
-            ).scalar_one()
-
-            # Count staged references that are already published. These rows will
-            # be refreshed rather than inserted.
-            existing = connection.execute(
-                text(f"""
-                    SELECT COUNT(DISTINCT staged.reference)
-                    FROM "{staging_table}" AS staged
-                    INNER JOIN "{published_table}" AS published
-                        ON published.reference = staged.reference
-                    WHERE staged.programme_id = :programme_id
-                    AND staged.reference IS NOT NULL
-                    AND TRIM(staged.reference) <> ''
-                """),
-                {"programme_id": programme_id},
-            ).scalar_one()
-
-            # Read the staging schema so the statement continues to work if the
-            # API supplies additional project columns in future.
-            columns = [
-                column["name"]
-                for column in inspector.get_columns(staging_table)
-            ]
-            quoted_columns = ", ".join(
-                f'"{column}"' for column in columns
-            )
-
-            # The reference identifies the row and must not be changed. Every
-            # other column is refreshed from the newly fetched staged row.
-            update_columns = [
-                column for column in columns
-                if column != "reference"
-            ]
-            update_assignments = ", ".join(
-                f'"{column}" = EXCLUDED."{column}"'
-                for column in update_columns
-            )
-
-            # Deduplicate staging by reference, then:
-            #
-            # - insert references that are not yet published;
-            # - update every non-key field for references already published;
-            # - leave published projects absent from staging untouched.
-            connection.execute(
-                text(f"""
-                    INSERT INTO "{published_table}" ({quoted_columns})
-                    SELECT {quoted_columns}
-                    FROM (
-                        SELECT *,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY reference
-                                ORDER BY reference
-                            ) AS row_number
-                        FROM "{staging_table}"
-                        WHERE programme_id = :programme_id
-                        AND reference IS NOT NULL
-                        AND TRIM(reference) <> ''
-                    ) AS staged
-                    WHERE row_number = 1
-                    ON CONFLICT (reference) DO UPDATE
-                    SET {update_assignments}
-                """),
-                {"programme_id": programme_id},
-            )
-
-            published_after = connection.execute(
-                text(f"""
-                    SELECT COUNT(*)
-                    FROM "{published_table}"
-                    WHERE programme_id = :programme_id
-                """),
-                {"programme_id": programme_id},
-            ).scalar_one()
+            published_after = _execute(connection,
+                f'SELECT COUNT(*) FROM "{published_table}" WHERE programme_id = :programme_id',
+                dict(programme_id=programme_id)).scalar_one()
 
         return {
             "staged": staged,
