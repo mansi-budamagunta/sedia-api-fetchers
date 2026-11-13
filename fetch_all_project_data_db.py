@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -40,8 +41,9 @@ class ETLConfig:
     db_url: str = field(repr=False)
     projects_staging_table: str = "raw_projects_staging"
     projects_published_table: str = "raw_projects"
-    min_record_threshold: int = 100
+    min_record_threshold: int = 1
     log_level: str = "INFO"
+    force_fetch: bool = False
 
 @dataclass
 class ProgrammeMetadata:
@@ -259,8 +261,8 @@ class ETLPipeline:
         published_count = self.project_sink.count_rows(table_name=self.config.projects_published_table, programme_id=programme.id)
         if published_count > programme.record_count:
             self.main_logger.warning(
-                f"Published project count exceeds facet count for {programme.name}: "
-                f"P={published_count}, F={programme.record_count}")
+                f"Database project count exceeds facet count for {programme.name}: "
+                f"database={published_count:,}, expected={programme.record_count:,}")
         return published_count < programme.record_count
 
     def run(self) -> Dict[str, Any]:
@@ -272,6 +274,9 @@ class ETLPipeline:
         self.main_logger.info("="*80)
         self.main_logger.info(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Configuration: {self.config}")
+        self.main_logger.info(f"Fetch mode: {'forced (count checks bypassed)' if self.config.force_fetch else 'routine (count-based)'}")
+        self.main_logger.info("Count equality does not verify freshness or that every expected project is present.")
+
 
         # Initialize results tracking
         results = {
@@ -304,13 +309,15 @@ class ETLPipeline:
                 self.main_logger.info(f"Expected records: {programme.record_count:,}")
                 # self.main_logger.info("="*60)
 
-                if not self.programme_needs_project_fetch(programme):
+                if not self.config.force_fetch and not self.programme_needs_project_fetch(programme):
                     results["programmes_skipped"] += 1
                     self.main_logger.info("SKIPPED: database project count meets or exceeds the facet count")
                     results['programmes_processed'] += 1
                     continue
 
                 # if programme_needs_project_fetch prepare for extraction
+                reason = "force-fetch requested" if self.config.force_fetch else "database count below facet count"
+                self.main_logger.info(f"FETCHING: {reason}")
                 programme_start = time.time()
 
                 # Drop the current staging table
@@ -330,10 +337,10 @@ class ETLPipeline:
                         self.config.projects_published_table,
                     )
 
-                    staged_count = publish_result["staged"]
+                    published_count = publish_result["published"]
                     elapsed = time.time() - programme_start
 
-                    if staged_count == programme.record_count:
+                    if published_count == programme.record_count:
                         results["programmes_complete"] += 1
                         status = "COMPLETE"
                     else:
@@ -345,12 +352,9 @@ class ETLPipeline:
 
                     self.main_logger.info(
                         f"{status}: {programme.name} — "
-                        f"expected={programme.record_count:,}, "
+                        f"expected={programme.record_count:,}, staged={publish_result['staged']:,}, "
                         f"database_total={publish_result['published']:,}, "
-                        f"inserted={publish_result['inserted']:,}, "
-                        f"updated={publish_result['updated']:,}, "
-                        f"time={elapsed:.1f}s"
-                    )
+                        f"inserted={publish_result['inserted']:,}, updated={publish_result['updated']:,}, time={elapsed:.1f}s")
 
                     if publish_result["invalid"] or publish_result["duplicate_staged"]:
                         self.main_logger.warning(
@@ -361,6 +365,7 @@ class ETLPipeline:
 
                 else: # extraction_result.record_count == 0
                     results["programmes_failed"] += 1
+                    self.main_logger.warning(f"NO UPDATE: {programme.name} — no project rows staged; existing database records retained")
 
                 results['programmes_processed'] += 1
 
@@ -387,7 +392,7 @@ class ETLPipeline:
             percentage = count / processed * 100 if processed else 0
             return f"{count}/{processed} ({percentage:.1f}%)"
 
-        self.main_logger.info("ETL PIPELINE COMPLETED")
+        self.main_logger.info("ETL PIPELINE SUMMARY")
         self.main_logger.info(
             f"Total execution time: {results['timing']['total']:.1f}s"
         )
@@ -414,11 +419,15 @@ class ETLPipeline:
         )
 
         self.main_logger.info("="*60)
-        self.main_logger.info(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.main_logger.info(f"Ended at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.main_logger.info(f"Log file: {self.logger.log_file}")
 
 def main():
     """Main entry point for the ETL pipeline."""
+    parser = argparse.ArgumentParser(description="Run the ETL pipeline")
+    parser.add_argument("--force-fetch", action="store_true", help="Fetch projects regardless of database counts")
+    args = parser.parse_args()
+
     # Set up configuration
     base_dir = script_dir
     config = ETLConfig(
@@ -426,6 +435,7 @@ def main():
         db_url=db_url,
         min_record_threshold=1,
         log_level="INFO",
+        force_fetch=args.force_fetch
     )
 
     # Ensure directories exist
